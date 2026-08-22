@@ -189,7 +189,7 @@ export default function LegoScanner() {
 
   function showToast(msg, type = "info") {
     setToast({ msg, type });
-    setTimeout(() => setToast(null), 2600);
+    setTimeout(() => setToast(null), type === "warn" ? 8000 : 2600);
   }
 
   async function persistSets(next) {
@@ -477,7 +477,7 @@ export default function LegoScanner() {
       );
       persistPartImages({ ...partImages, [setNum]: crops });
     } catch (err) {
-      showToast("Fehler beim Einlesen der PDF", "warn");
+      showToast(`Fehler: ${err?.message || err}`.slice(0, 120), "warn");
     } finally {
       setPdfUploadingFor(null);
     }
