@@ -35,6 +35,7 @@ const STORAGE_KEY_PARTSLISTS = "parts-lists"; // { [setNum]: [{elementId, name, 
 const STORAGE_KEY_COLLECTED = "collected-counts"; // { [setNum]: { [partIndex]: gesammelte Anzahl } }
 const STORAGE_KEY_LIST_PAGES = "parts-list-pages"; // { [setNum]: ["<base64 jpeg>", ...] } - nur die Teileliste-Seiten, nicht die ganze Anleitung
 const STORAGE_KEY_PART_IMAGES = "part-images"; // { [setNum]: ["<dataURL oder null>", ...] } - ein Bild pro Teil, Index = partsLists-Index
+const STORAGE_KEY_RB_KEY = "rebrickable-api-key";
 
 // Gemeinsame Farbpalette für Foto-Erkennung UND PDF-Teileliste, damit beide Seiten
 // dieselben Begriffe verwenden und der Abgleich nicht an unterschiedlichen Farbnamen scheitert.
@@ -83,6 +84,9 @@ export default function LegoScanner() {
   const [collectedCounts, setCollectedCounts] = useState({}); // { [setNum]: { [partIndex]: Anzahl } }
   const [partsListPages, setPartsListPages] = useState({}); // { [setNum]: ["<base64 jpeg>", ...] }
   const [partImages, setPartImages] = useState({}); // { [setNum]: ["<dataURL oder null>", ...] } Index = partsLists-Index
+  const [rebrickableKey, setRebrickableKey] = useState("");
+  const [rebrickableKeyDraft, setRebrickableKeyDraft] = useState("");
+  const [rebrickableLoadingFor, setRebrickableLoadingFor] = useState(null);
   const [pdfjsReady, setPdfjsReady] = useState(false);
   const [pdfjsFailed, setPdfjsFailed] = useState(false);
   const [pdfUploadingFor, setPdfUploadingFor] = useState(null); // setNum, während PDF verarbeitet wird
@@ -182,6 +186,13 @@ export default function LegoScanner() {
         if (pi) setPartImages(JSON.parse(pi.value));
       } catch (e) {}
       try {
+        const rb = await window.storage.get(STORAGE_KEY_RB_KEY);
+        if (rb) {
+          setRebrickableKey(rb.value);
+          setRebrickableKeyDraft(rb.value);
+        }
+      } catch (e) {}
+      try {
         const l = await window.storage.get(STORAGE_KEY_LOG);
         if (l) setLog(JSON.parse(l.value));
       } catch (e) {}
@@ -233,6 +244,65 @@ export default function LegoScanner() {
     try {
       await window.storage.set(STORAGE_KEY_PART_IMAGES, JSON.stringify(next));
     } catch (e) {}
+  }
+
+  async function persistRebrickableKey(key) {
+    setRebrickableKey(key);
+    try {
+      await window.storage.set(STORAGE_KEY_RB_KEY, key);
+    } catch (e) {}
+  }
+
+  // ---------- Teileliste direkt von Rebrickable laden (öffentliche, offizielle Datenbank) ----------
+  // Umgeht die Unsicherheiten/Grenzen von KI-basierter Bild-Extraktion komplett: echte
+  // Herstellerdaten inkl. offizieller Teilbilder, direkt über einen Setnummer-Abgleich.
+  async function loadPartsListFromRebrickable(setNum) {
+    if (!rebrickableKey.trim()) {
+      showToast("Bitte zuerst einen Rebrickable-API-Key im Zahnrad-Menü eintragen", "warn");
+      return;
+    }
+    setRebrickableLoadingFor(setNum);
+    try {
+      let allResults = [];
+      let path = `/api/v3/lego/sets/${setNum}/parts/?page_size=1000`;
+      let guard = 0;
+      while (path && guard < 20) {
+        guard++;
+        const res = await fetch(`/api/rebrickable?path=${encodeURIComponent(path)}`, {
+          headers: { "x-rb-key": rebrickableKey.trim() },
+        });
+        const data = await res.json();
+        if (!res.ok) {
+          throw new Error(data?.detail || data?.error || `HTTP ${res.status}`);
+        }
+        allResults = allResults.concat(data.results || []);
+        if (data.next) {
+          const u = new URL(data.next);
+          path = u.pathname + u.search;
+        } else {
+          path = null;
+        }
+      }
+
+      if (allResults.length === 0) {
+        showToast(`Keine Teile für Set ${setNum} gefunden — Setnummer korrekt (inkl. '-1')?`, "warn");
+        return;
+      }
+
+      const parts = allResults.map((r) => ({
+        elementId: r.part?.part_num || "",
+        name: r.part?.name || "",
+        colorName: r.color?.name || "",
+        qty: r.quantity || 0,
+        imageUrl: r.part?.part_img_url || null,
+      }));
+      persistPartsLists({ ...partsLists, [setNum]: parts });
+      showToast(`${parts.length} Teile für ${setNum} von Rebrickable geladen`, "good");
+    } catch (err) {
+      showToast(`Rebrickable-Fehler: ${err?.message || err}`.slice(0, 150), "warn");
+    } finally {
+      setRebrickableLoadingFor(null);
+    }
   }
 
   // ---------- Sicherung: Export/Import des gesamten Fortschritts ----------
@@ -908,6 +978,8 @@ export default function LegoScanner() {
   // Liefert das Vergleichsbild für einen Treffer: zuerst das fest gespeicherte Teilbild,
   // sonst als Fallback die ganze Teileliste-Seite (falls vorhanden), sonst nichts.
   function getMatchThumb(m) {
+    const entry = (partsLists[m.setNum] || [])[m.index];
+    if (entry?.imageUrl) return entry.imageUrl;
     const stored = (partImages[m.setNum] || [])[m.index];
     if (stored) return stored;
     const pages = partsListPages[m.setNum] || [];
@@ -983,11 +1055,48 @@ export default function LegoScanner() {
             animation: "slideUp 0.15s ease",
           }}
         >
-          <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 4 }}>Teilelisten</div>
-          <p style={{ fontSize: 12, color: COLORS.textDim, lineHeight: 1.5 }}>
-            Der Set-Abgleich läuft lokal über die Teilelisten aus deinen PDF-Bauanleitungen — lade sie
-            unten bei jedem Set hoch. Ohne hochgeladene Teileliste kannst du das Set trotzdem manuell
-            zuordnen.
+          <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 4 }}>Rebrickable-API-Key</div>
+          <p style={{ fontSize: 12, color: COLORS.textDim, lineHeight: 1.5, marginBottom: 8 }}>
+            Empfohlener Weg, um Teilelisten zu laden: echte Herstellerdaten inkl. offizieller
+            Teilbilder, direkt über die Setnummer. Kostenlos erstellbar unter{" "}
+            <span style={{ color: COLORS.text }}>rebrickable.com → Settings → API</span>.
+          </p>
+          <div style={{ display: "flex", gap: 8 }}>
+            <input
+              value={rebrickableKeyDraft}
+              onChange={(e) => setRebrickableKeyDraft(e.target.value)}
+              placeholder="dein Rebrickable API-Key"
+              style={{
+                flex: 1,
+                background: COLORS.bg,
+                border: `1px solid ${COLORS.panelBorder}`,
+                borderRadius: 8,
+                padding: "10px 12px",
+                color: COLORS.text,
+                fontSize: 14,
+              }}
+            />
+            <button
+              onClick={() => {
+                persistRebrickableKey(rebrickableKeyDraft);
+                showToast("Rebrickable-Key gespeichert", "good");
+              }}
+              style={{
+                background: COLORS.accent,
+                border: "none",
+                borderRadius: 8,
+                padding: "10px 16px",
+                color: "#fff",
+                fontWeight: 600,
+                fontSize: 14,
+              }}
+            >
+              Speichern
+            </button>
+          </div>
+          <p style={{ fontSize: 12, color: COLORS.textDim, marginTop: 12, lineHeight: 1.5 }}>
+            Alternativ (ohne Key): Teileliste als PDF-Seitenzahl oder Screenshot/Foto hochladen —
+            läuft über KI-Bilderkennung und ist etwas weniger zuverlässig.
           </p>
         </div>
       )}
@@ -1084,6 +1193,39 @@ export default function LegoScanner() {
                         <span style={{ fontSize: 12, color: COLORS.textDim }}>Keine Teileliste</span>
                       )}
                       <button
+                        onClick={() => loadPartsListFromRebrickable(s)}
+                        disabled={rebrickableLoadingFor === s}
+                        style={{
+                          background: COLORS.accent,
+                          border: "none",
+                          borderRadius: 8,
+                          padding: "5px 10px",
+                          color: "#fff",
+                          fontSize: 12,
+                          fontWeight: 600,
+                          display: "flex",
+                          alignItems: "center",
+                          gap: 5,
+                        }}
+                      >
+                        {rebrickableLoadingFor === s ? (
+                          <>
+                            <Loader2 size={12} style={{ animation: "spin 1s linear infinite" }} /> Lädt...
+                          </>
+                        ) : (
+                          <>
+                            <Download size={12} /> {partsCount > 0 ? "Neu laden" : "Von Rebrickable laden"}
+                          </>
+                        )}
+                      </button>
+                    </div>
+                    <div style={{ display: "flex", alignItems: "center", gap: 6, margin: "8px 0" }}>
+                      <div style={{ flex: 1, height: 1, background: COLORS.panelBorder }} />
+                      <span style={{ fontSize: 10, color: COLORS.textDim }}>oder ohne Rebrickable-Key</span>
+                      <div style={{ flex: 1, height: 1, background: COLORS.panelBorder }} />
+                    </div>
+                    <div style={{ display: "flex", justifyContent: "flex-end" }}>
+                      <button
                         onClick={() => triggerPdfUpload(s)}
                         disabled={uploading}
                         style={{
@@ -1104,7 +1246,7 @@ export default function LegoScanner() {
                           </>
                         ) : (
                           <>
-                            <FileUp size={12} /> {partsCount > 0 ? "Erneut hochladen" : "Anleitung (PDF)"}
+                            <FileUp size={12} /> Anleitung (PDF)
                           </>
                         )}
                       </button>
@@ -1809,7 +1951,7 @@ export default function LegoScanner() {
                           .map((p) => {
                             const collected = (collectedCounts[manualPickSet] || {})[p.idx] || 0;
                             const needed = p.qty || 0;
-                            const thumb = (partImages[manualPickSet] || [])[p.idx];
+                            const thumb = p.imageUrl || (partImages[manualPickSet] || [])[p.idx];
                             return (
                               <button
                                 key={p.idx}
