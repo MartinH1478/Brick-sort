@@ -377,22 +377,23 @@ export default function LegoScanner() {
               {
                 type: "text",
                 text:
-                  `Die ${pageImages.length} Bilder oben zeigen Seite(n) aus einer offiziellen ` +
-                  "LEGO-Bauanleitung mit der Teileliste des Sets: eine Tabelle mit vielen Einträgen, " +
-                  "jeder Eintrag zeigt eine Stückzahl (z.B. '1x', '4x'), eine kleine Bild-Illustration " +
-                  "des Teils UND eine Element-/Teilenummer (z.B. '303901', '6135105'). WICHTIG: Diese " +
-                  "Listen haben KEINEN Textnamen und KEINE Farbe als Wort aufgedruckt - du musst Form " +
-                  "und Farbe SELBST aus der kleinen Illustration jedes Eintrags visuell erkennen. " +
-                  "Extrahiere ALLE Einträge aus ALLEN gezeigten Bildern (typischerweise 30-100+ " +
-                  "Einträge insgesamt, übersehe keine). Gib für JEDEN Eintrag zusätzlich an, in " +
-                  "WELCHEM der Bilder er zu sehen ist (0 = erstes Bild, 1 = zweites Bild, usw.) und " +
-                  "die ungefähre Position/Größe SEINER ILLUSTRATION auf diesem Bild in Prozent " +
-                  "(bezogen auf das ganze Bild, x/y von oben links). " +
+                  `Ich sortiere gerade lose LEGO-Teile aus meinem eigenen Set zu Hause und möchte ` +
+                  `dafür meinen eigenen Bestand digital erfassen. Die ${pageImages.length} Bilder ` +
+                  "oben sind Fotos/Screenshots aus der Bauanleitung, die diesem Set beiliegt - dort " +
+                  "steht die Teileliste: eine Tabelle mit vielen Einträgen, jeder Eintrag zeigt eine " +
+                  "Stückzahl (z.B. '1x', '4x'), eine kleine Bild-Illustration des Teils UND eine " +
+                  "Element-/Teilenummer (z.B. '303901', '6135105'). Diese Listen haben KEINEN " +
+                  "Textnamen und KEINE Farbe als Wort aufgedruckt - bitte schätze Form und Farbe " +
+                  "anhand der kleinen Illustration jedes Eintrags ein, das hilft mir beim Sortieren " +
+                  "sehr. Bitte liste für mich alle Einträge auf, die du auf den Bildern erkennen " +
+                  "kannst. Gib für jeden Eintrag an, in welchem Bild er zu sehen ist (0 = erstes " +
+                  "Bild, 1 = zweites Bild, usw.) und die ungefähre Position/Größe seiner " +
+                  "Illustration auf diesem Bild in Prozent (bezogen auf das ganze Bild, x/y von " +
+                  "oben links). " +
                   "Antworte NUR mit einem JSON-Objekt ohne Markdown-Codeblock im Format: " +
                   '{"parts": [{"elementId": "die aufgedruckte Element-/Teilenummer als String, exakt wie im Bild", "name": "von DIR anhand der Illustration eingeschätzter Fachbegriff MIT Maßen im Format AxB, z.B. \'Stein 2x4\', \'Platte 1x2\', \'Fliese 2x2\', \'Dachstein 45° 2x2\'", "colorName": "von DIR anhand der Illustration eingeschätzt, EXAKT eine Farbe aus dieser Liste: ' +
                   LEGO_COLOR_PALETTE +
-                  '", "qty": die aufgedruckte Stückzahl als Zahl (ohne das x), "pageIndex": 0-basierter Index des Bildes in dem dieser Eintrag zu sehen ist, "bbox": {"xPct": Zahl 0-100, "yPct": Zahl 0-100, "wPct": Zahl 0-100, "hPct": Zahl 0-100} der Illustration dieses Teils, oder null falls nicht bestimmbar}]}. ' +
-                  'Falls WIRKLICH keine Teileliste erkennbar ist, antworte NUR mit: {"parts": []}',
+                  '", "qty": die aufgedruckte Stückzahl als Zahl (ohne das x), "pageIndex": 0-basierter Index des Bildes in dem dieser Eintrag zu sehen ist, "bbox": {"xPct": Zahl 0-100, "yPct": Zahl 0-100, "wPct": Zahl 0-100, "hPct": Zahl 0-100} der Illustration dieses Teils, oder null falls nicht bestimmbar}], "note": "falls du auf den Bildern KEINE Teileliste erkennen kannst, lass parts leer und beschreibe hier stattdessen kurz auf Deutsch, was du auf den Bildern tatsächlich siehst"}',
               },
             ],
           },
@@ -414,10 +415,11 @@ export default function LegoScanner() {
     const parts = Array.isArray(parsed.parts) ? parsed.parts : [];
 
     if (parts.length === 0) {
+      const note = parsed?.note;
       showToast(
         parseFailed
           ? `Unvollständige Antwort: ${raw.slice(0, 200)}`
-          : `KI-Antwort ohne Teile: ${raw.slice(0, 200)}`,
+          : `KI sieht: ${note || raw.slice(0, 200)}`,
         "warn"
       );
       return;
