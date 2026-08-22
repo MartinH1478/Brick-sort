@@ -190,7 +190,7 @@ export default function LegoScanner() {
 
   function showToast(msg, type = "info") {
     setToast({ msg, type });
-    setTimeout(() => setToast(null), type === "warn" ? 8000 : 2600);
+    setTimeout(() => setToast(null), type === "warn" ? 15000 : 2600);
   }
 
   async function persistSets(next) {
@@ -416,8 +416,8 @@ export default function LegoScanner() {
     if (parts.length === 0) {
       showToast(
         parseFailed
-          ? "Antwort war unvollständig (Liste zu lang?) — bitte nochmal versuchen"
-          : "Keine Teileliste auf den Bildern gefunden",
+          ? `Unvollständige Antwort: ${raw.slice(0, 200)}`
+          : `KI-Antwort ohne Teile: ${raw.slice(0, 200)}`,
         "warn"
       );
       return;
