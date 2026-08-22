@@ -98,6 +98,7 @@ export default function LegoScanner() {
   const processingRef = useRef(false);
   const fileInputRef = useRef(null);
   const pdfInputRef = useRef(null);
+  const teilelisteImageInputRef = useRef(null);
   const pdfInputSetNumRef = useRef(null);
   const backupInputRef = useRef(null);
 
@@ -352,6 +353,98 @@ export default function LegoScanner() {
     });
   }
 
+  // Gemeinsame Analyse-Logik: bekommt fertige Bilder (Base64, egal ob aus PDF gerendert oder
+  // direkt als Screenshot hochgeladen) und extrahiert daraus die Teileliste + Einzelbilder.
+  async function processPartsListImages(setNum, pageImages) {
+    persistPartsListPages({ ...partsListPages, [setNum]: pageImages });
+
+    const pageImageBlocks = pageImages.map((img) => ({
+      type: "image",
+      source: { type: "base64", media_type: "image/jpeg", data: img },
+    }));
+
+    const response = await fetch("/api/claude", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        model: "claude-sonnet-4-6",
+        max_tokens: 8000,
+        messages: [
+          {
+            role: "user",
+            content: [
+              ...pageImageBlocks,
+              {
+                type: "text",
+                text:
+                  `Die ${pageImages.length} Bilder oben zeigen Seite(n) aus einer offiziellen ` +
+                  "LEGO-Bauanleitung mit der Teileliste des Sets: eine Tabelle mit vielen Einträgen, " +
+                  "jeder Eintrag zeigt eine Stückzahl (z.B. '1x', '4x'), eine kleine Bild-Illustration " +
+                  "des Teils UND eine Element-/Teilenummer (z.B. '303901', '6135105'). WICHTIG: Diese " +
+                  "Listen haben KEINEN Textnamen und KEINE Farbe als Wort aufgedruckt - du musst Form " +
+                  "und Farbe SELBST aus der kleinen Illustration jedes Eintrags visuell erkennen. " +
+                  "Extrahiere ALLE Einträge aus ALLEN gezeigten Bildern (typischerweise 30-100+ " +
+                  "Einträge insgesamt, übersehe keine). Gib für JEDEN Eintrag zusätzlich an, in " +
+                  "WELCHEM der Bilder er zu sehen ist (0 = erstes Bild, 1 = zweites Bild, usw.) und " +
+                  "die ungefähre Position/Größe SEINER ILLUSTRATION auf diesem Bild in Prozent " +
+                  "(bezogen auf das ganze Bild, x/y von oben links). " +
+                  "Antworte NUR mit einem JSON-Objekt ohne Markdown-Codeblock im Format: " +
+                  '{"parts": [{"elementId": "die aufgedruckte Element-/Teilenummer als String, exakt wie im Bild", "name": "von DIR anhand der Illustration eingeschätzter Fachbegriff MIT Maßen im Format AxB, z.B. \'Stein 2x4\', \'Platte 1x2\', \'Fliese 2x2\', \'Dachstein 45° 2x2\'", "colorName": "von DIR anhand der Illustration eingeschätzt, EXAKT eine Farbe aus dieser Liste: ' +
+                  LEGO_COLOR_PALETTE +
+                  '", "qty": die aufgedruckte Stückzahl als Zahl (ohne das x), "pageIndex": 0-basierter Index des Bildes in dem dieser Eintrag zu sehen ist, "bbox": {"xPct": Zahl 0-100, "yPct": Zahl 0-100, "wPct": Zahl 0-100, "hPct": Zahl 0-100} der Illustration dieses Teils, oder null falls nicht bestimmbar}]}. ' +
+                  'Falls WIRKLICH keine Teileliste erkennbar ist, antworte NUR mit: {"parts": []}',
+              },
+            ],
+          },
+        ],
+      }),
+    });
+    const data = await response.json();
+    const textBlock = (data.content || []).find((b) => b.type === "text");
+    const raw = textBlock ? textBlock.text.trim() : '{"parts": []}';
+    const clean = raw.replace(/```json|```/g, "").trim();
+    let parsed;
+    let parseFailed = false;
+    try {
+      parsed = JSON.parse(clean);
+    } catch (err) {
+      parsed = { parts: [] };
+      parseFailed = true;
+    }
+    const parts = Array.isArray(parsed.parts) ? parsed.parts : [];
+
+    if (parts.length === 0) {
+      showToast(
+        parseFailed
+          ? "Antwort war unvollständig (Liste zu lang?) — bitte nochmal versuchen"
+          : "Keine Teileliste auf den Bildern gefunden",
+        "warn"
+      );
+      return;
+    }
+
+    persistPartsLists({ ...partsLists, [setNum]: parts });
+    showToast(`${parts.length} Teile für ${setNum} hinterlegt`, "good");
+
+    // Pro Teil ein einzelnes Bild ausschneiden (anhand der von der KI gelieferten Position) -
+    // einmalig hier, nicht bei jedem einzelnen Scan.
+    const crops = await Promise.all(
+      parts.map(async (p) => {
+        const pageImg = pageImages[p.pageIndex] ?? pageImages[0];
+        if (!pageImg) return null;
+        if (p.bbox) {
+          try {
+            return await cropImageRegion(pageImg, p.bbox);
+          } catch (e) {
+            return `data:image/jpeg;base64,${pageImg}`;
+          }
+        }
+        return `data:image/jpeg;base64,${pageImg}`;
+      })
+    );
+    persistPartImages({ ...partImages, [setNum]: crops });
+  }
+
   async function handlePdfSelected(e) {
     const file = e.target.files?.[0];
     const setNum = pdfInputSetNumRef.current;
@@ -389,93 +482,32 @@ export default function LegoScanner() {
         showToast("Angegebene Seite(n) konnten nicht gerendert werden — Seitenzahl korrekt?", "warn");
         return;
       }
-      persistPartsListPages({ ...partsListPages, [setNum]: pageImages });
+      await processPartsListImages(setNum, pageImages);
+    } catch (err) {
+      showToast(`Fehler: ${err?.message || err}`.slice(0, 120), "warn");
+    } finally {
+      setPdfUploadingFor(null);
+    }
+  }
 
-      const pageImageBlocks = pageImages.map((img) => ({
-        type: "image",
-        source: { type: "base64", media_type: "image/jpeg", data: img },
-      }));
+  // ---------- Alternative: Teileliste als Screenshot/Foto hochladen ----------
+  // Umgeht jede Unsicherheit über PDF-Seitenzahlen (gedruckte Seitenzahl vs. tatsächliche
+  // PDF-Seite) - der Nutzer macht/wählt einfach ein Bild der Teileliste-Seite direkt.
+  function triggerTeilelisteImageUpload(setNum) {
+    pdfInputSetNumRef.current = setNum;
+    teilelisteImageInputRef.current?.click();
+  }
 
-      const response = await fetch("/api/claude", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          model: "claude-sonnet-4-6",
-          max_tokens: 8000,
-          messages: [
-            {
-              role: "user",
-              content: [
-                ...pageImageBlocks,
-                {
-                  type: "text",
-                  text:
-                    `Die ${pageImages.length} Bilder oben zeigen Seite(n) aus einer offiziellen ` +
-                    "LEGO-Bauanleitung mit der Teileliste des Sets: eine Tabelle mit vielen Einträgen, " +
-                    "jeder Eintrag zeigt eine Stückzahl (z.B. '1x', '4x'), eine kleine Bild-Illustration " +
-                    "des Teils UND eine Element-/Teilenummer (z.B. '303901', '6135105'). WICHTIG: Diese " +
-                    "Listen haben KEINEN Textnamen und KEINE Farbe als Wort aufgedruckt - du musst Form " +
-                    "und Farbe SELBST aus der kleinen Illustration jedes Eintrags visuell erkennen. " +
-                    "Extrahiere ALLE Einträge aus ALLEN gezeigten Bildern (typischerweise 30-100+ " +
-                    "Einträge insgesamt, übersehe keine). Gib für JEDEN Eintrag zusätzlich an, in " +
-                    "WELCHEM der Bilder er zu sehen ist (0 = erstes Bild, 1 = zweites Bild, usw.) und " +
-                    "die ungefähre Position/Größe SEINER ILLUSTRATION auf diesem Bild in Prozent " +
-                    "(bezogen auf das ganze Bild, x/y von oben links). " +
-                    "Antworte NUR mit einem JSON-Objekt ohne Markdown-Codeblock im Format: " +
-                    '{"parts": [{"elementId": "die aufgedruckte Element-/Teilenummer als String, exakt wie im Bild", "name": "von DIR anhand der Illustration eingeschätzter Fachbegriff MIT Maßen im Format AxB, z.B. \'Stein 2x4\', \'Platte 1x2\', \'Fliese 2x2\', \'Dachstein 45° 2x2\'", "colorName": "von DIR anhand der Illustration eingeschätzt, EXAKT eine Farbe aus dieser Liste: ' +
-                    LEGO_COLOR_PALETTE +
-                    '", "qty": die aufgedruckte Stückzahl als Zahl (ohne das x), "pageIndex": 0-basierter Index des Bildes in dem dieser Eintrag zu sehen ist, "bbox": {"xPct": Zahl 0-100, "yPct": Zahl 0-100, "wPct": Zahl 0-100, "hPct": Zahl 0-100} der Illustration dieses Teils, oder null falls nicht bestimmbar}]}. ' +
-                    'Falls WIRKLICH keine Teileliste erkennbar ist, antworte NUR mit: {"parts": []}',
-                },
-              ],
-            },
-          ],
-        }),
-      });
-      const data = await response.json();
-      const textBlock = (data.content || []).find((b) => b.type === "text");
-      const raw = textBlock ? textBlock.text.trim() : '{"parts": []}';
-      const clean = raw.replace(/```json|```/g, "").trim();
-      let parsed;
-      let parseFailed = false;
-      try {
-        parsed = JSON.parse(clean);
-      } catch (err) {
-        parsed = { parts: [] };
-        parseFailed = true;
-      }
-      const parts = Array.isArray(parsed.parts) ? parsed.parts : [];
+  async function handleTeilelisteImagesSelected(e) {
+    const files = Array.from(e.target.files || []);
+    const setNum = pdfInputSetNumRef.current;
+    e.target.value = "";
+    if (files.length === 0 || !setNum) return;
 
-      if (parts.length === 0) {
-        showToast(
-          parseFailed
-            ? "Antwort war unvollständig (Liste zu lang?) — bitte nochmal versuchen"
-            : "Keine Teileliste auf den angegebenen Seiten gefunden",
-          "warn"
-        );
-        return;
-      }
-
-      persistPartsLists({ ...partsLists, [setNum]: parts });
-      showToast(`${parts.length} Teile für ${setNum} hinterlegt`, "good");
-
-      // Pro Teil ein einzelnes Bild ausschneiden (anhand der von der KI gelieferten Position) -
-      // einmalig hier, nicht bei jedem einzelnen Scan.
-      const crops = await Promise.all(
-        parts.map(async (p) => {
-          const pageImg = pageImages[p.pageIndex] ?? pageImages[0];
-          if (!pageImg) return null;
-          if (p.bbox) {
-            try {
-              return await cropImageRegion(pageImg, p.bbox);
-            } catch (e) {
-              return `data:image/jpeg;base64,${pageImg}`;
-            }
-          }
-          return `data:image/jpeg;base64,${pageImg}`;
-        })
-      );
-      persistPartImages({ ...partImages, [setNum]: crops });
+    setPdfUploadingFor(setNum);
+    try {
+      const images = await Promise.all(files.map((f) => fileToResizedBase64(f)));
+      await processPartsListImages(setNum, images);
     } catch (err) {
       showToast(`Fehler: ${err?.message || err}`.slice(0, 120), "warn");
     } finally {
@@ -1064,6 +1096,31 @@ export default function LegoScanner() {
                         marginTop: 8,
                       }}
                     />
+                    <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 8 }}>
+                      <div style={{ flex: 1, height: 1, background: COLORS.panelBorder }} />
+                      <span style={{ fontSize: 10, color: COLORS.textDim }}>oder</span>
+                      <div style={{ flex: 1, height: 1, background: COLORS.panelBorder }} />
+                    </div>
+                    <button
+                      onClick={() => triggerTeilelisteImageUpload(s)}
+                      disabled={uploading}
+                      style={{
+                        width: "100%",
+                        marginTop: 8,
+                        background: "transparent",
+                        border: `1px dashed ${COLORS.panelBorder}`,
+                        borderRadius: 8,
+                        padding: "8px 10px",
+                        color: COLORS.textDim,
+                        fontSize: 12,
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        gap: 5,
+                      }}
+                    >
+                      <Camera size={12} /> Teileliste als Screenshot/Foto hochladen (statt PDF-Seitenzahl)
+                    </button>
                   </div>
                 );
               })}
@@ -1076,6 +1133,14 @@ export default function LegoScanner() {
             accept="application/pdf"
             style={{ display: "none" }}
             onChange={handlePdfSelected}
+          />
+          <input
+            ref={teilelisteImageInputRef}
+            type="file"
+            accept="image/*"
+            multiple
+            style={{ display: "none" }}
+            onChange={handleTeilelisteImagesSelected}
           />
 
           <button
