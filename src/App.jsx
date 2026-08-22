@@ -506,7 +506,7 @@ export default function LegoScanner() {
 
     setPdfUploadingFor(setNum);
     try {
-      const images = await Promise.all(files.map((f) => fileToResizedBase64(f)));
+      const images = await Promise.all(files.map((f) => fileToHighResBase64(f)));
       await processPartsListImages(setNum, images);
     } catch (err) {
       showToast(`Fehler: ${err?.message || err}`.slice(0, 120), "warn");
@@ -618,6 +618,32 @@ export default function LegoScanner() {
           const ctx = canvas.getContext("2d");
           ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
           resolve(canvas.toDataURL("image/jpeg", 0.8).split(",")[1]);
+        };
+        img.onerror = reject;
+        img.src = reader.result;
+      };
+      reader.onerror = reject;
+      reader.readAsDataURL(file);
+    });
+  }
+
+  // Für Teileliste-Screenshots: viel höher aufgelöst als das 640px-Einzelteil-Foto, da hier
+  // viele kleine Element-IDs/Zahlen lesbar bleiben müssen. Läuft nur einmalig pro Set, nicht
+  // bei jedem Scan - Dateigröße ist hier zweitrangig gegenüber Lesbarkeit.
+  function fileToHighResBase64(file) {
+    return new Promise((resolve, reject) => {
+      const img = new Image();
+      const reader = new FileReader();
+      reader.onload = () => {
+        img.onload = () => {
+          const targetW = 2000;
+          const scale = Math.min(1, targetW / img.width);
+          const canvas = document.createElement("canvas");
+          canvas.width = img.width * scale;
+          canvas.height = img.height * scale;
+          const ctx = canvas.getContext("2d");
+          ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+          resolve(canvas.toDataURL("image/jpeg", 0.92).split(",")[1]);
         };
         img.onerror = reject;
         img.src = reader.result;
