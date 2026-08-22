@@ -1,4 +1,5 @@
 {
+  "allowScripts": { "esbuild": true },
   "name": "brick-sorter",
   "private": true,
   "version": "1.0.0",
