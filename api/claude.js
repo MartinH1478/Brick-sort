@@ -1,40 +1,43 @@
-import React, { useState, useRef, useEffect } from "react";
-import {
-  Camera,
-  Plus,
-  X,
-  Check,
-  Loader2,
-  Package,
-  Settings,
-  ChevronRight,
-  ImagePlus,
-  SkipForward,
-  FileUp,
-  ClipboardList,
-  Download,
-  Upload,
-} from "lucide-react";
+// Vercel Serverless Function: leitet Anfragen an die Anthropic API weiter.
+// Der API-Key bleibt server-seitig (Umgebungsvariable ANTHROPIC_API_KEY bei Vercel
+// eintragen) und wird nie an den Browser ausgeliefert. Löst nebenbei auch das
+// CORS-Problem, das direkte Browser-Aufrufe an api.anthropic.com verhindern würde.
 
-// ---------- Farbtokens ----------
-// Basis: warmes Anthrazit + LEGO-Rot als Signalfarbe, Studs als wiederkehrendes Formmotiv
-const COLORS = {
-  bg: "#15171c",
-  panel: "#1d2028",
-  panelBorder: "#2a2e38",
-  text: "#eef0f3",
-  textDim: "#9aa0ac",
-  accent: "#e0392d", // klassisches LEGO-Rot
-  good: "#3fae6b",
-  warn: "#e0a72d",
+// PDF-/Teileliste-Analysen können länger als die Standard-10s dauern - Limit auf das
+// beim kostenlosen Vercel-Plan maximal mögliche (60s) anheben.
+export const config = {
+  maxDuration: 60,
 };
 
-const STORAGE_KEY_SETS = "my-sets";
-const STORAGE_KEY_LOG = "scan-log";
-const STORAGE_KEY_PARTSLISTS = "parts-lists"; // { [setNum]: [{elementId, name, colorName, qty}] }
-const STORAGE_KEY_COLLECTED = "collected-counts"; // { [setNum]: { [partIndex]: gesammelte Anzahl } }
-const STORAGE_KEY_LIST_PAGES = "parts-list-pages"; // { [setNum]: ["<base64 jpeg>", ...] } - nur die Teileliste-Seiten, nicht die ganze Anleitung
-const STORAGE_KEY_PART_IMAGES = "part-images"; // { [setNum]: ["<dataURL oder null>", ...] } - ein Bild pro Teil, Index = partsLists-Index
+export default async function handler(req, res) {
+  if (req.method !== "POST") {
+    res.status(405).json({ error: "Nur POST erlaubt" });
+    return;
+  }
+
+  const apiKey = process.env.ANTHROPIC_API_KEY;
+  if (!apiKey) {
+    res.status(500).json({ error: "ANTHROPIC_API_KEY ist nicht als Umgebungsvariable gesetzt" });
+    return;
+  }
+
+  try {
+    const anthropicRes = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-api-key": apiKey,
+        "anthropic-version": "2023-06-01",
+      },
+      body: JSON.stringify(req.body),
+    });
+
+    const data = await anthropicRes.json();
+    res.status(anthropicRes.status).json(data);
+  } catch (err) {
+    res.status(500).json({ error: "Proxy-Fehler", details: String(err) });
+  }
+}const STORAGE_KEY_PART_IMAGES = "part-images"; // { [setNum]: ["<dataURL oder null>", ...] } - ein Bild pro Teil, Index = partsLists-Index
 
 // Gemeinsame Farbpalette für Foto-Erkennung UND PDF-Teileliste, damit beide Seiten
 // dieselben Begriffe verwenden und der Abgleich nicht an unterschiedlichen Farbnamen scheitert.
