@@ -2,7 +2,9 @@
 // Der API-Key bleibt server-seitig (Umgebungsvariable ANTHROPIC_API_KEY bei Vercel
 // eintragen) und wird nie an den Browser ausgeliefert. Löst nebenbei auch das
 // CORS-Problem, das direkte Browser-Aufrufe an api.anthropic.com verhindern würde.
-
+export const config = {
+  maxDuration: 60,
+};
 export default async function handler(req, res) {
   if (req.method !== "POST") {
     res.status(405).json({ error: "Nur POST erlaubt" });
