@@ -797,14 +797,20 @@ export default function LegoScanner() {
       const raw = textBlock ? textBlock.text.trim() : "{}";
       const clean = raw.replace(/```json|```/g, "").trim();
       let parsed;
+      let parseFailed = false;
       try {
         parsed = JSON.parse(clean);
       } catch (e) {
         parsed = { detected: false };
+        parseFailed = true;
       }
 
       if (!parsed.detected) {
         updatePhoto(id, { status: "no-part" });
+        showToast(
+          parseFailed ? `Unklare KI-Antwort: ${raw.slice(0, 150)}` : "Kein Teil auf dem Foto erkannt",
+          "warn"
+        );
         return;
       }
 
@@ -812,7 +818,7 @@ export default function LegoScanner() {
       await matchAgainstSetsAI(id, parsed, photo.base64);
     } catch (e) {
       updatePhoto(id, { status: "no-part" });
-      showToast("Fehler bei der Erkennung eines Fotos", "warn");
+      showToast(`Fehler bei der Erkennung: ${e?.message || e}`.slice(0, 150), "warn");
     }
   }
 
@@ -914,7 +920,7 @@ export default function LegoScanner() {
       });
     } catch (e) {
       updatePhoto(id, { matchStatus: "none", candidateSets: [] });
-      showToast("Abgleich fehlgeschlagen, bitte manuell zuordnen", "warn");
+      showToast(`Abgleich fehlgeschlagen: ${e?.message || e}`.slice(0, 150), "warn");
     }
   }
 
