@@ -1544,6 +1544,7 @@ export default function LegoScanner() {
             ref={fileInputRef}
             type="file"
             accept="image/*"
+            capture="environment"
             multiple
             style={{ display: "none" }}
             onChange={handleFilesSelected}
