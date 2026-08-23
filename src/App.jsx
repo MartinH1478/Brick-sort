@@ -895,18 +895,156 @@ export default function LegoScanner() {
 
       updatePhoto(id, { status: "reviewing", result: parsed, matchStatus: "checking" });
       setLastDebugResponse(raw);
-      await matchAgainstSetsAI(id, parsed, photo.base64);
+      await matchAgainstSetsAI(id, parsed);
     } catch (e) {
       updatePhoto(id, { status: "no-part" });
       showToast(`Fehler bei der Erkennung: ${e?.message || e}`.slice(0, 150), "warn");
     }
   }
 
-  // ---------- Set-Abgleich per KI ----------
-  // Statt stur Zeichenketten zu vergleichen, bekommt die KI das Foto UND die kompletten
-  // Teilelisten aller Sets mit hinterlegter Liste und beurteilt selbst, welche Einträge
-  // plausibel zum fotografierten Teil passen (inkl. Synonymen wie "Winkelplatte"/"Eckplatte").
-  async function matchAgainstSetsAI(id, part, base64) {
+  // ---------- Set-Abgleich lokal (kostenlos, kein API-Aufruf) ----------
+  // Die Teilelisten von Rebrickable sind strukturiert und zuverlässig genug, um Maße, Farbe
+  // und Kategorie direkt per Text-Heuristik zu vergleichen - spart einen kompletten
+  // KI-Aufruf pro Scan (das war der Haupt-Kostentreiber: die komplette Teileliste als Text
+  // bei jedem einzelnen Foto erneut an die KI zu schicken).
+  const SHAPE_KEYWORDS_DE_EN = {
+    stein: "brick",
+    platte: "plate",
+    fliese: "tile",
+    dachstein: "slope",
+    bogenstein: "arch",
+    winkelplatte: "plate",
+    eckplatte: "plate",
+    rundstein: "round",
+    scharnier: "hinge",
+    zylinder: "cylinder",
+    kegel: "cone",
+  };
+  const COLOR_DE_EN = {
+    schwarz: "black",
+    weiß: "white",
+    hellgrau: "gray",
+    dunkelgrau: "gray",
+    rot: "red",
+    dunkelrot: "red",
+    blau: "blue",
+    dunkelblau: "blue",
+    hellblau: "blue",
+    gelb: "yellow",
+    grün: "green",
+    dunkelgrün: "green",
+    limette: "green",
+    orange: "orange",
+    braun: "brown",
+    dunkelbraun: "brown",
+    beige: "tan",
+    rosa: "pink",
+    magenta: "magenta",
+    lila: "purple",
+    türkis: "cyan",
+    sandgrün: "green",
+    sandblau: "blue",
+    sandgelb: "yellow",
+    transparent: "trans",
+    "transparent-klar": "trans",
+    gold: "gold",
+    silber: "silver",
+    perlgrau: "gray",
+  };
+
+  function extractDimsLocal(text) {
+    const m = (text || "").match(/(\d+)\s*[x×]\s*(\d+)/i);
+    if (!m) return null;
+    const a = parseInt(m[1], 10);
+    const b = parseInt(m[2], 10);
+    return [Math.min(a, b), Math.max(a, b)].join("x");
+  }
+
+  function scoreLocalMatch(part, entry) {
+    const dimGuess = extractDimsLocal(part.shapeName);
+    const dimEntry = extractDimsLocal(entry.name);
+    const dimMatch = !!(dimGuess && dimEntry && dimGuess === dimEntry);
+
+    const colorKeyword = COLOR_DE_EN[(part.colorName || "").toLowerCase().trim()] || null;
+    const colorMatch = !!(colorKeyword && (entry.colorName || "").toLowerCase().includes(colorKeyword));
+
+    let categoryMatch = false;
+    const shapeLower = (part.shapeName || "").toLowerCase();
+    const entryLower = (entry.name || "").toLowerCase();
+    for (const [de, en] of Object.entries(SHAPE_KEYWORDS_DE_EN)) {
+      if (shapeLower.includes(de) && entryLower.includes(en)) {
+        categoryMatch = true;
+        break;
+      }
+    }
+
+    const idGuess = (part.elementIdGuess || "").toString().trim().toLowerCase();
+    const entryId = (entry.elementId || "").toString().trim().toLowerCase();
+    const idMatch = !!(idGuess && entryId && (entryId === idGuess || entryId.includes(idGuess) || idGuess.includes(entryId)));
+
+    let score = 0;
+    if (idMatch) score += 6;
+    if (dimMatch) score += 4;
+    if (colorMatch) score += 2;
+    if (categoryMatch) score += 1;
+
+    return { score, dimMatch, colorMatch, categoryMatch, idMatch };
+  }
+
+  // Kompakte KI-Nachfrage NUR mit einer kleinen, bereits lokal vorgefilterten Kandidatenliste
+  // (nicht die komplette Teileliste) - deutlich günstiger als der komplette Katalog, aber
+  // trotzdem KI-Unterstützung für unklare Fälle (Synonyme, ungenaue Fotoerkennung).
+  async function aiFallbackMatch(part, setNum, candidatePool) {
+    const compact = candidatePool
+      .map((c) => `${c.index}:{id:"${c.entry.elementId || ""}",name:"${c.entry.name || ""}",color:"${c.entry.colorName || ""}"}`)
+      .join(", ");
+    try {
+      const response = await fetch("/api/claude", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          model: "claude-sonnet-4-6",
+          max_tokens: 200,
+          messages: [
+            {
+              role: "user",
+              content: [
+                {
+                  type: "text",
+                  text:
+                    `Ein LEGO-Teil wurde fotografiert, vorläufig eingeschätzt als Form "${part.shapeName}", ` +
+                    `Farbe "${part.colorName}"${part.elementIdGuess ? `, evtl. Element-ID "${part.elementIdGuess}"` : ""}. ` +
+                    `Hier eine kurze Kandidatenliste aus Set ${setNum} (Index:{id,name,color}): ${compact}. ` +
+                    "Welcher Index passt am ehesten (auch bei abweichender Formulierung/Synonymen wie " +
+                    "'Winkelplatte'='Eckplatte')? Antworte NUR mit JSON ohne Codeblock: " +
+                    '{"index": Zahl oder null falls wirklich keiner passt, "confidence": "high|medium|low"}',
+                },
+              ],
+            },
+          ],
+        }),
+      });
+      const data = await response.json();
+      const textBlock = (data.content || []).find((b) => b.type === "text");
+      const raw = textBlock ? textBlock.text.trim() : "{}";
+      const clean = raw.replace(/```json|```/g, "").trim();
+      let parsed;
+      try {
+        parsed = JSON.parse(clean);
+      } catch (e) {
+        parsed = { index: null };
+      }
+      setLastDebugResponse(`[Abgleich-Nachfrage ${setNum}] ${raw}`);
+      if (parsed && parsed.index !== null && parsed.index !== undefined) {
+        return { index: parsed.index, confidence: parsed.confidence || "medium" };
+      }
+      return null;
+    } catch (e) {
+      return null;
+    }
+  }
+
+  async function matchAgainstSetsAI(id, part) {
     if (mySets.length === 0) {
       updatePhoto(id, { matchStatus: "no-sets", candidateSets: [] });
       return;
@@ -917,98 +1055,68 @@ export default function LegoScanner() {
       return;
     }
 
-    const listsText = setsWithLists
-      .map((setNum) => {
-        const items = (partsLists[setNum] || [])
-          .map((p, i) => `${i}:{id:"${p.elementId || ""}",name:"${p.name || ""}",color:"${p.colorName || ""}",qty:${p.qty || ""}}`)
-          .join(", ");
-        return `Set ${setNum}: [${items}]`;
-      })
-      .join("\n");
+    const MAX_AI_FALLBACK_SETS = 3; // Kosten-Deckel: höchstens 3 Sets per KI-Nachfrage prüfen
+    let setsCheckedWithAI = 0;
 
-    // Falls vorhanden: echte Teileliste-Seitenbilder als zusätzlichen visuellen Kontext beifügen,
-    // damit die KI das Foto direkt gegen die Original-Illustrationen abgleichen kann - nicht nur
-    // gegen die Text-Beschreibung.
-    const pageImageBlocks = [];
-    let pageImageNote = "";
-    setsWithLists.forEach((setNum) => {
-      const pages = partsListPages[setNum] || [];
-      pages.forEach((pageBase64, localIdx) => {
-        pageImageBlocks.push({
-          type: "image",
-          source: { type: "base64", media_type: "image/jpeg", data: pageBase64 },
-        });
-        pageImageNote += `[Bild ist Seitenbild ${localIdx} von Set ${setNum}] `;
-      });
-    });
+    // Sets in der vom Nutzer eingetragenen Reihenfolge prüfen - erstes Set hat Priorität,
+    // erst bei keinem Treffer wird das nächste Set angeschaut (ein Set nach dem anderen
+    // vervollständigen statt Teile wahllos verteilen).
+    for (const setNum of setsWithLists) {
+      const list = partsLists[setNum] || [];
+      const scored = list.map((entry, index) => ({ index, entry, ...scoreLocalMatch(part, entry) }));
+      const strong = scored.filter((r) => r.dimMatch || r.idMatch).sort((a, b) => b.score - a.score);
 
-    try {
-      const response = await fetch("/api/claude", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          model: "claude-sonnet-4-6",
-          max_tokens: 800,
-          messages: [
+      // Sicherer lokaler Treffer -> kein API-Aufruf nötig, kostenlos.
+      if (strong.length > 0 && strong[0].score >= 6) {
+        const best = strong[0];
+        updatePhoto(id, {
+          matchStatus: "found",
+          candidateSets: [
             {
-              role: "user",
-              content: [
-                {
-                  type: "image",
-                  source: { type: "base64", media_type: "image/jpeg", data: base64 },
-                },
-                ...pageImageBlocks,
-                {
-                  type: "text",
-                  text:
-                    "Das ERSTE Bild oben zeigt ein einzelnes LEGO-Teil (vorläufig eingeschätzt als: " +
-                    `Form "${part.shapeName}", Farbe "${part.colorName}"). ` +
-                    pageImageNote +
-                    "Nutze diese Seitenbilder aktiv für einen VISUELLEN Vergleich der Illustrationen " +
-                    "mit dem fotografierten Teil, zusätzlich zur Textliste unten. " +
-                    "Unten stehen die Teilelisten mehrerer LEGO-Sets, jeweils mit Index, Element-ID, " +
-                    "Name/Form, Farbe und Stückzahl. Beurteile anhand des Fotos, der Seitenbilder UND " +
-                    "der Textbeschreibung, welche Einträge plausibel genau dieses Teil sein könnten - " +
-                    "auch wenn die Formulierung leicht abweicht (z.B. 'Winkelplatte' = 'Eckplatte', " +
-                    "unterschiedliche Wortstellung, Abkürzungen). Berücksichtige Form, Maße UND Farbe " +
-                    "gemeinsam, nicht nur eines davon. " +
-                    "WICHTIG zur Priorität: Die Sets unten stehen in der Reihenfolge, in der der Nutzer " +
-                    "sie eingetragen hat - das ERSTE Set hat Priorität. Wenn im ersten Set ein plausibler " +
-                    "Treffer existiert, gib NUR diesen einen Treffer zurück (nicht zusätzlich Treffer aus " +
-                    "späteren Sets) - so wird ein Set nach dem anderen vervollständigt statt Teile über " +
-                    "mehrere Sets zu verteilen. Prüfe spätere Sets NUR, wenn im ersten Set kein " +
-                    "plausibler Treffer existiert. Gib NUR plausible Treffer zurück, keine Zwangszuordnung.\n\n" +
-                    listsText +
-                    "\n\nAntworte NUR mit einem JSON-Array ohne Markdown-Codeblock, ein Eintrag pro " +
-                    "plausiblem Treffer (leeres Array [] falls keiner passt), Format: " +
-                    '[{"setNum": "Set-Nummer", "index": Index-Zahl des Eintrags aus der Liste, "matchedName": "name-Feld des Treffers", "confidence": "high|medium|low"}]',
-                },
-              ],
+              setNum,
+              index: best.index,
+              matchedName: `${best.entry.name} · ${best.entry.colorName}`,
+              confidence: "high",
             },
           ],
-        }),
-      });
-      const data = await response.json();
-      const textBlock = (data.content || []).find((b) => b.type === "text");
-      const raw = textBlock ? textBlock.text.trim() : `KEIN TEXT IN ANTWORT — volle Server-Antwort: ${JSON.stringify(data).slice(0, 400)}`;
-      const clean = raw.replace(/```json|```/g, "").trim();
-      let matches;
-      try {
-        matches = JSON.parse(clean);
-        if (!Array.isArray(matches)) matches = [];
-      } catch (e) {
-        matches = [];
+        });
+        return;
       }
-      setLastDebugResponse(`[Abgleich] ${raw}`);
 
-      updatePhoto(id, {
-        matchStatus: matches.length > 0 ? "found" : "none",
-        candidateSets: matches,
-      });
-    } catch (e) {
-      updatePhoto(id, { matchStatus: "none", candidateSets: [] });
-      showToast(`Abgleich fehlgeschlagen: ${e?.message || e}`.slice(0, 150), "warn");
+      // Unsicher -> kleine KI-Nachfrage, aber NUR mit den noch offenen Teilen dieses Sets
+      // (nicht der ganzen Liste) - hält die Anfrage klein und günstig.
+      if (setsCheckedWithAI < MAX_AI_FALLBACK_SETS) {
+        const counts = collectedCounts[setNum] || {};
+        const candidatePool = scored
+          .filter((r) => (r.entry.qty || 0) - (counts[r.index] || 0) > 0)
+          .sort((a, b) => b.score - a.score)
+          .slice(0, 60);
+
+        if (candidatePool.length > 0) {
+          setsCheckedWithAI++;
+          const result = await aiFallbackMatch(part, setNum, candidatePool);
+          if (result) {
+            const match = candidatePool.find((c) => c.index === result.index);
+            if (match) {
+              updatePhoto(id, {
+                matchStatus: "found",
+                candidateSets: [
+                  {
+                    setNum,
+                    index: match.index,
+                    matchedName: `${match.entry.name} · ${match.entry.colorName}`,
+                    confidence: result.confidence,
+                  },
+                ],
+              });
+              return;
+            }
+          }
+        }
+      }
     }
+
+    updatePhoto(id, { matchStatus: "none", candidateSets: [] });
   }
 
   function confirmAssignment(id, setNum, partIndex, matchedName, qty = 1) {
