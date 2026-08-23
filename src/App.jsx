@@ -91,6 +91,7 @@ export default function LegoScanner() {
   const [rebrickableLoadingFor, setRebrickableLoadingFor] = useState(null);
   const [setMeta, setSetMeta] = useState({}); // { [setNum]: { name, imgUrl } }
   const [expandedSetNum, setExpandedSetNum] = useState(null);
+  const [expandedOverviewSet, setExpandedOverviewSet] = useState(null);
   const [pdfjsReady, setPdfjsReady] = useState(false);
   const [pdfjsFailed, setPdfjsFailed] = useState(false);
   const [pdfUploadingFor, setPdfUploadingFor] = useState(null); // setNum, während PDF verarbeitet wird
@@ -1675,6 +1676,8 @@ export default function LegoScanner() {
                 const totalNeeded = rows.reduce((sum, r) => sum + (r.qty || 0), 0);
                 const totalCollected = rows.reduce((sum, r) => sum + Math.min(r.collected, r.qty || 0), 0);
                 const complete = totalCollected >= totalNeeded;
+                const meta = setMeta[setNum];
+                const isExpanded = expandedOverviewSet === setNum;
 
                 return (
                   <div
@@ -1683,19 +1686,60 @@ export default function LegoScanner() {
                       background: COLORS.panel,
                       border: `1px solid ${complete ? COLORS.good : COLORS.panelBorder}`,
                       borderRadius: 12,
-                      padding: 14,
+                      overflow: "hidden",
                       marginBottom: 12,
                     }}
                   >
-                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
-                      <span style={{ fontSize: 15, fontWeight: 700 }}>{setNum}</span>
-                      <span style={{ fontSize: 12, color: complete ? COLORS.good : COLORS.textDim, display: "flex", alignItems: "center", gap: 4 }}>
+                    <button
+                      onClick={() => setExpandedOverviewSet(isExpanded ? null : setNum)}
+                      style={{
+                        width: "100%",
+                        display: "flex",
+                        alignItems: "center",
+                        gap: 10,
+                        padding: 14,
+                        background: "transparent",
+                        border: "none",
+                        textAlign: "left",
+                      }}
+                    >
+                      {meta?.imgUrl ? (
+                        <img
+                          src={meta.imgUrl}
+                          alt=""
+                          style={{ width: 32, height: 32, objectFit: "contain", borderRadius: 6, background: "#fff", flexShrink: 0 }}
+                        />
+                      ) : (
+                        <div
+                          style={{
+                            width: 32,
+                            height: 32,
+                            borderRadius: 6,
+                            background: COLORS.bg,
+                            display: "flex",
+                            alignItems: "center",
+                            justifyContent: "center",
+                            flexShrink: 0,
+                          }}
+                        >
+                          <Package size={14} color={COLORS.textDim} />
+                        </div>
+                      )}
+                      <span style={{ fontSize: 15, fontWeight: 700, flex: 1 }}>{setNum}</span>
+                      <span style={{ fontSize: 12, color: complete ? COLORS.good : COLORS.textDim, display: "flex", alignItems: "center", gap: 4, flexShrink: 0 }}>
                         {complete && <Check size={13} />}
                         {totalCollected}/{totalNeeded} Teile
                       </span>
-                    </div>
+                      <ChevronRight
+                        size={16}
+                        color={COLORS.textDim}
+                        style={{ flexShrink: 0, transform: isExpanded ? "rotate(90deg)" : "none", transition: "transform 0.15s" }}
+                      />
+                    </button>
 
-                    <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
+                    {isExpanded && (
+                      <div style={{ padding: "0 14px 14px" }}>
+                        <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
                       {rows
                         .sort((a, b) => a.missing - b.missing) // fehlende zuerst
                         .map((r) => {
@@ -1765,7 +1809,9 @@ export default function LegoScanner() {
                             </div>
                           );
                         })}
-                    </div>
+                        </div>
+                      </div>
+                    )}
                   </div>
                 );
               })
