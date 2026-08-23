@@ -1014,10 +1014,15 @@ export default function LegoScanner() {
                   text:
                     `Ein LEGO-Teil wurde fotografiert, vorläufig eingeschätzt als Form "${part.shapeName}", ` +
                     `Farbe "${part.colorName}"${part.elementIdGuess ? `, evtl. Element-ID "${part.elementIdGuess}"` : ""}. ` +
-                    `Hier eine kurze Kandidatenliste aus Set ${setNum} (Index:{id,name,color}): ${compact}. ` +
+                    "WICHTIG: Die geschätzten Maße/Form aus dem Foto sind unzuverlässig (Perspektive, " +
+                    "Entfernung) - verlass dich NICHT blind darauf. Die folgende Kandidatenliste wurde " +
+                    "bereits grob nach Farbe vorgefiltert (Farbe daher meist schon passend), du sollst " +
+                    "primär beurteilen, welcher Eintrag von der FORM her am ehesten passt. " +
+                    `Kandidatenliste aus Set ${setNum} (Index:{id,name,color}): ${compact}. ` +
                     "Welcher Index passt am ehesten (auch bei abweichender Formulierung/Synonymen wie " +
-                    "'Winkelplatte'='Eckplatte')? Antworte NUR mit JSON ohne Codeblock: " +
-                    '{"index": Zahl oder null falls wirklich keiner passt, "confidence": "high|medium|low"}',
+                    "'Winkelplatte'='Eckplatte')? Sei zurückhaltend - im Zweifel lieber null zurückgeben " +
+                    "als falsch raten. Antworte NUR mit JSON ohne Codeblock: " +
+                    '{"index": Zahl oder null falls wirklich keiner sicher passt, "confidence": "high|medium|low"}',
                 },
               ],
             },
@@ -1063,19 +1068,21 @@ export default function LegoScanner() {
     // vervollständigen statt Teile wahllos verteilen).
     for (const setNum of setsWithLists) {
       const list = partsLists[setNum] || [];
+      const counts = collectedCounts[setNum] || {};
       const scored = list.map((entry, index) => ({ index, entry, ...scoreLocalMatch(part, entry) }));
-      const strong = scored.filter((r) => r.dimMatch || r.idMatch).sort((a, b) => b.score - a.score);
 
-      // Sicherer lokaler Treffer -> kein API-Aufruf nötig, kostenlos.
-      if (strong.length > 0 && strong[0].score >= 6) {
-        const best = strong[0];
+      // NUR eine exakte Element-ID (vom Teil abgelesen) gilt als sicher genug, um ohne
+      // KI-Nachfrage zu übernehmen - geschätzte Maße/Farbe allein waren zu oft falsch, das
+      // hat schon mehrfach zu falschen "sicheren" Treffern geführt.
+      const idHit = scored.find((r) => r.idMatch);
+      if (idHit) {
         updatePhoto(id, {
           matchStatus: "found",
           candidateSets: [
             {
               setNum,
-              index: best.index,
-              matchedName: `${best.entry.name} · ${best.entry.colorName}`,
+              index: idHit.index,
+              matchedName: `${idHit.entry.name} · ${idHit.entry.colorName}`,
               confidence: "high",
             },
           ],
@@ -1083,14 +1090,18 @@ export default function LegoScanner() {
         return;
       }
 
-      // Unsicher -> kleine KI-Nachfrage, aber NUR mit den noch offenen Teilen dieses Sets
-      // (nicht der ganzen Liste) - hält die Anfrage klein und günstig.
+      // Kandidatenliste primär nach FARBE filtern - die schätzt die KI beim Foto zuverlässiger
+      // ein als Maße. Nur wenn die Farbe gar keine Treffer im Set ergibt, auf alle offenen
+      // Teile zurückfallen.
       if (setsCheckedWithAI < MAX_AI_FALLBACK_SETS) {
-        const counts = collectedCounts[setNum] || {};
-        const candidatePool = scored
-          .filter((r) => (r.entry.qty || 0) - (counts[r.index] || 0) > 0)
-          .sort((a, b) => b.score - a.score)
-          .slice(0, 60);
+        const openEntries = scored.filter((r) => (r.entry.qty || 0) - (counts[r.index] || 0) > 0);
+        const colorKeyword = COLOR_DE_EN[(part.colorName || "").toLowerCase().trim()] || null;
+        let candidatePool = openEntries;
+        if (colorKeyword) {
+          const colorFiltered = openEntries.filter((r) => (r.entry.colorName || "").toLowerCase().includes(colorKeyword));
+          if (colorFiltered.length > 0) candidatePool = colorFiltered;
+        }
+        candidatePool = candidatePool.sort((a, b) => b.score - a.score).slice(0, 80);
 
         if (candidatePool.length > 0) {
           setsCheckedWithAI++;
