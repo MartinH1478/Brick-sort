@@ -271,16 +271,23 @@ export default function LegoScanner() {
   }
 
   // Lädt Setname + Vorschaubild von Rebrickable (leichtgewichtiger Aufruf, keine Teileliste).
-  async function fetchSetMeta(setNum, currentMeta, currentKey) {
+  async function fetchSetMeta(setNum, currentKey) {
     if (!currentKey || !currentKey.trim()) return;
-    if (currentMeta[setNum]) return; // schon vorhanden
     try {
       const res = await fetch(`/api/rebrickable?path=${encodeURIComponent(`/api/v3/lego/sets/${setNum}/`)}`, {
         headers: { "x-rb-key": currentKey.trim() },
       });
       const data = await res.json();
       if (!res.ok || !data.set_img_url) return;
-      persistSetMeta({ ...currentMeta, [setNum]: { name: data.name || "", imgUrl: data.set_img_url } });
+      // Funktionales Update gegen den JEWEILS aktuellen Stand, nicht gegen einen veralteten
+      // Zwischenstand aus dem Moment des Aufrufs - sonst überschreibt jedes neue Bild die
+      // vorher schon geladenen (genau der Bug, den wir gerade hatten).
+      setSetMeta((prev) => {
+        if (prev[setNum]) return prev; // zwischenzeitlich schon geladen
+        const next = { ...prev, [setNum]: { name: data.name || "", imgUrl: data.set_img_url } };
+        window.storage.set(STORAGE_KEY_SET_META, JSON.stringify(next)).catch(() => {});
+        return next;
+      });
     } catch (e) {
       // still - Vorschaubild ist rein optional
     }
@@ -295,7 +302,7 @@ export default function LegoScanner() {
       for (const s of mySets) {
         if (cancelled) return;
         if (!setMeta[s]) {
-          await fetchSetMeta(s, setMeta, rebrickableKey);
+          await fetchSetMeta(s, rebrickableKey);
           await new Promise((r) => setTimeout(r, 200));
         }
       }
@@ -446,7 +453,7 @@ export default function LegoScanner() {
     }
     persistSets([...mySets, normalized]);
     setNewSetInput("");
-    fetchSetMeta(normalized, setMeta, rebrickableKey);
+    fetchSetMeta(normalized, rebrickableKey);
   }
 
   function removeSet(setNum) {
@@ -1683,23 +1690,35 @@ export default function LegoScanner() {
                         .map((r) => {
                           const found = r.missing === 0;
                           const partial = !found && r.collected > 0;
+                          const thumb = r.imageUrl || (partImages[setNum] || [])[r.idx];
                           return (
                             <div
                               key={r.idx}
                               style={{
                                 display: "flex",
+                                alignItems: "center",
                                 justifyContent: "space-between",
                                 fontSize: 13,
                                 color: found ? COLORS.good : COLORS.textDim,
                                 padding: "4px 0",
                                 borderTop: `1px solid ${COLORS.panelBorder}`,
+                                gap: 8,
                               }}
                             >
-                              <span style={{ display: "flex", alignItems: "center", gap: 5 }}>
-                                {found && <Check size={12} />}
-                                {r.name} · {r.colorName}
+                              <span style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
+                                {thumb && (
+                                  <img
+                                    src={thumb}
+                                    alt=""
+                                    style={{ width: 26, height: 26, objectFit: "contain", borderRadius: 4, background: "#fff", flexShrink: 0 }}
+                                  />
+                                )}
+                                {found && <Check size={12} style={{ flexShrink: 0 }} />}
+                                <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                                  {r.name} · {r.colorName}
+                                </span>
                               </span>
-                              <span style={{ fontWeight: 600 }}>
+                              <span style={{ fontWeight: 600, flexShrink: 0 }}>
                                 {found ? (
                                   <span style={{ color: COLORS.good }}>{r.collected}/{r.qty}</span>
                                 ) : (
