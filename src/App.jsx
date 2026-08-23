@@ -1049,7 +1049,7 @@ export default function LegoScanner() {
     }
   }
 
-  async function matchAgainstSetsAI(id, part) {
+  async function matchAgainstSetsAI(id, part, skipSets = []) {
     if (mySets.length === 0) {
       updatePhoto(id, { matchStatus: "no-sets", candidateSets: [] });
       return;
@@ -1067,6 +1067,7 @@ export default function LegoScanner() {
     // erst bei keinem Treffer wird das nächste Set angeschaut (ein Set nach dem anderen
     // vervollständigen statt Teile wahllos verteilen).
     for (const setNum of setsWithLists) {
+      if (skipSets.includes(setNum)) continue;
       const list = partsLists[setNum] || [];
       const counts = collectedCounts[setNum] || {};
       const scored = list.map((entry, index) => ({ index, entry, ...scoreLocalMatch(part, entry) }));
@@ -1128,6 +1129,20 @@ export default function LegoScanner() {
     }
 
     updatePhoto(id, { matchStatus: "none", candidateSets: [] });
+    if (skipSets.length > 0) {
+      showToast("Keine weiteren Sets mit passendem Teil gefunden — bitte manuell wählen", "warn");
+    }
+  }
+
+  // Sucht gezielt in den NÄCHSTEN Sets weiter, überspringt dabei das Set, dessen Vorschlag
+  // gerade abgelehnt wurde (z.B. weil er nicht zum Foto passt).
+  async function searchNextSet(id) {
+    const photo = photos.find((p) => p.id === id);
+    if (!photo) return;
+    const rejectedSetNum = photo.candidateSets?.[0]?.setNum;
+    const triedSets = [...(photo.triedSets || []), rejectedSetNum].filter(Boolean);
+    updatePhoto(id, { matchStatus: "checking", triedSets });
+    await matchAgainstSetsAI(id, photo.result, triedSets);
   }
 
   function confirmAssignment(id, setNum, partIndex, matchedName, qty = 1) {
@@ -2364,6 +2379,25 @@ export default function LegoScanner() {
                       );
                     })}
                   </div>
+                  <button
+                    onClick={() => searchNextSet(reviewingPhoto.id)}
+                    style={{
+                      width: "100%",
+                      background: "transparent",
+                      border: `1px solid ${COLORS.panelBorder}`,
+                      borderRadius: 8,
+                      padding: 10,
+                      color: COLORS.text,
+                      fontSize: 12,
+                      marginBottom: 8,
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      gap: 6,
+                    }}
+                  >
+                    <ChevronRight size={14} /> Passt nicht — nächstes Set durchsuchen
+                  </button>
                   <button
                     onClick={() => setManualOverride(true)}
                     style={{
