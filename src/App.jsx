@@ -14,6 +14,7 @@ import {
   ClipboardList,
   Download,
   Upload,
+  Minus,
 } from "lucide-react";
 
 // ---------- Farbtokens ----------
@@ -240,6 +241,16 @@ export default function LegoScanner() {
     try {
       await window.storage.set(STORAGE_KEY_COLLECTED, JSON.stringify(next));
     } catch (e) {}
+  }
+
+  // Ein fälschlich bestätigtes Teil wieder aus der gesammelten Menge entfernen (-1).
+  function decrementCollected(setNum, idx) {
+    const setCounts = { ...(collectedCounts[setNum] || {}) };
+    const current = setCounts[idx] || 0;
+    if (current <= 0) return;
+    setCounts[idx] = current - 1;
+    persistCollectedCounts({ ...collectedCounts, [setNum]: setCounts });
+    showToast("Zuordnung zurückgenommen", "good");
   }
 
   async function persistPartsListPages(next) {
@@ -1718,7 +1729,7 @@ export default function LegoScanner() {
                                   {r.name} · {r.colorName}
                                 </span>
                               </span>
-                              <span style={{ fontWeight: 600, flexShrink: 0 }}>
+                              <span style={{ fontWeight: 600, flexShrink: 0, display: "flex", alignItems: "center", gap: 6 }}>
                                 {found ? (
                                   <span style={{ color: COLORS.good }}>{r.collected}/{r.qty}</span>
                                 ) : (
@@ -1730,6 +1741,26 @@ export default function LegoScanner() {
                                   </>
                                 )}
                                 {!found && r.elementId ? ` (ID ${r.elementId})` : ""}
+                                {r.collected > 0 && (
+                                  <button
+                                    onClick={() => decrementCollected(setNum, r.idx)}
+                                    aria-label="Zuordnung zurücknehmen"
+                                    style={{
+                                      background: COLORS.bg,
+                                      border: `1px solid ${COLORS.panelBorder}`,
+                                      borderRadius: 6,
+                                      width: 22,
+                                      height: 22,
+                                      display: "flex",
+                                      alignItems: "center",
+                                      justifyContent: "center",
+                                      color: COLORS.textDim,
+                                      flexShrink: 0,
+                                    }}
+                                  >
+                                    <Minus size={12} />
+                                  </button>
+                                )}
                               </span>
                             </div>
                           );
