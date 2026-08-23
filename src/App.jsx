@@ -93,6 +93,9 @@ export default function LegoScanner() {
   const [showSettings, setShowSettings] = useState(false);
   const [log, setLog] = useState([]);
   const [toast, setToast] = useState(null);
+  const [lastDebugRequest, setLastDebugRequest] = useState(null);
+  const [lastDebugResponse, setLastDebugResponse] = useState(null);
+  const [showDebug, setShowDebug] = useState(false);
   const [manualPickSet, setManualPickSet] = useState(null); // setNum während manueller Teilauswahl
   const [manualFilter, setManualFilter] = useState("");
   const [manualOverride, setManualOverride] = useState(false); // true = manuelle Liste zeigen, obwohl ein Treffer da ist
@@ -756,6 +759,10 @@ export default function LegoScanner() {
     const photo = photos.find((p) => p.id === id);
     if (!photo) return;
 
+    setLastDebugRequest(
+      `Bild-Größe (base64): ${Math.round((photo.base64.length * 0.75) / 1024)} KB · gesendet um ${new Date().toLocaleTimeString("de-DE")}`
+    );
+
     try {
       const response = await fetch("/api/claude", {
         method: "POST",
@@ -806,16 +813,13 @@ export default function LegoScanner() {
       const notDetected = parseFailed || !parsed.shapeName || parsed.confidence === "none";
       if (notDetected) {
         updatePhoto(id, { status: "no-part" });
-        showToast(
-          parseFailed
-            ? `Unklare KI-Antwort: ${raw.slice(0, 150)}`
-            : `Kein Teil erkannt — KI sieht: ${parsed.sceneDescription || "(keine Beschreibung)"}`,
-          "warn"
-        );
+        setLastDebugResponse(raw);
+        showToast(`Kein Teil erkannt — KI-Antwort: ${raw.slice(0, 250)}`, "warn");
         return;
       }
 
       updatePhoto(id, { status: "reviewing", result: parsed, matchStatus: "checking" });
+      setLastDebugResponse(raw);
       await matchAgainstSetsAI(id, parsed, photo.base64);
     } catch (e) {
       updatePhoto(id, { status: "no-part" });
@@ -1112,6 +1116,57 @@ export default function LegoScanner() {
             Alternativ (ohne Key): Teileliste als PDF-Seitenzahl oder Screenshot/Foto hochladen —
             läuft über KI-Bilderkennung und ist etwas weniger zuverlässig.
           </p>
+
+          <div style={{ borderTop: `1px solid ${COLORS.panelBorder}`, marginTop: 16, paddingTop: 12 }}>
+            <button
+              onClick={() => setShowDebug((v) => !v)}
+              style={{ background: "transparent", border: "none", color: COLORS.textDim, fontSize: 12, padding: 0, display: "flex", alignItems: "center", gap: 4 }}
+            >
+              {showDebug ? "▾" : "▸"} Debug: letzte KI-Anfrage/-Antwort anzeigen
+            </button>
+            {showDebug && (
+              <div style={{ marginTop: 8, display: "flex", flexDirection: "column", gap: 8 }}>
+                <div>
+                  <div style={{ fontSize: 11, color: COLORS.textDim, marginBottom: 3 }}>Anfrage (Foto-Erkennung):</div>
+                  <div
+                    style={{
+                      background: COLORS.bg,
+                      border: `1px solid ${COLORS.panelBorder}`,
+                      borderRadius: 6,
+                      padding: 8,
+                      fontSize: 11,
+                      color: COLORS.text,
+                      fontFamily: "monospace",
+                      whiteSpace: "pre-wrap",
+                      wordBreak: "break-word",
+                    }}
+                  >
+                    {lastDebugRequest || "(noch keine Anfrage gesendet)"}
+                  </div>
+                </div>
+                <div>
+                  <div style={{ fontSize: 11, color: COLORS.textDim, marginBottom: 3 }}>Rohe KI-Antwort:</div>
+                  <div
+                    style={{
+                      background: COLORS.bg,
+                      border: `1px solid ${COLORS.panelBorder}`,
+                      borderRadius: 6,
+                      padding: 8,
+                      fontSize: 11,
+                      color: COLORS.text,
+                      fontFamily: "monospace",
+                      whiteSpace: "pre-wrap",
+                      wordBreak: "break-word",
+                      maxHeight: 200,
+                      overflowY: "auto",
+                    }}
+                  >
+                    {lastDebugResponse || "(noch keine Antwort erhalten)"}
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
         </div>
       )}
 
