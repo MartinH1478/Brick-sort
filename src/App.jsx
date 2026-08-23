@@ -782,7 +782,8 @@ export default function LegoScanner() {
                     "relativ zum bekannten 1x2-Referenzstein), statt die Größe nur aus der " +
                     "Perspektive zu schätzen. " +
                     "Wenn KEIN eindeutiges LEGO-Teil im Bild zu erkennen ist (z.B. komplett leeres/unscharfes " +
-                    "Bild), antworte NUR mit: {\"detected\": false}. Es ist VÖLLIG NORMAL und ERWARTET, " +
+                    "Bild), antworte NUR mit: {\"detected\": false, \"description\": \"kurze Beschreibung auf Deutsch, was du stattdessen im Bild siehst\"}. " +
+                    "Es ist VÖLLIG NORMAL und ERWARTET, " +
                     "dass zwei Objekte im Bild sind (das zu bestimmende Teil UND der Referenzstein " +
                     "rechts daneben) - das ist KEIN Grund für detected:false, sondern der Normalfall. " +
                     "Wenn ein Teil klar erkennbar ist, antworte NUR mit einem JSON-Objekt ohne Markdown-Codeblock: " +
@@ -811,7 +812,9 @@ export default function LegoScanner() {
       if (!parsed.detected) {
         updatePhoto(id, { status: "no-part" });
         showToast(
-          parseFailed ? `Unklare KI-Antwort: ${raw.slice(0, 150)}` : "Kein Teil auf dem Foto erkannt",
+          parseFailed
+            ? `Unklare KI-Antwort: ${raw.slice(0, 150)}`
+            : `Kein Teil erkannt — KI sieht: ${parsed.description || "(keine Beschreibung)"}`,
           "warn"
         );
         return;
