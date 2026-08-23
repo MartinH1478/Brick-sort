@@ -36,6 +36,7 @@ const STORAGE_KEY_COLLECTED = "collected-counts"; // { [setNum]: { [partIndex]: 
 const STORAGE_KEY_LIST_PAGES = "parts-list-pages"; // { [setNum]: ["<base64 jpeg>", ...] } - nur die Teileliste-Seiten, nicht die ganze Anleitung
 const STORAGE_KEY_PART_IMAGES = "part-images"; // { [setNum]: ["<dataURL oder null>", ...] } - ein Bild pro Teil, Index = partsLists-Index
 const STORAGE_KEY_RB_KEY = "rebrickable-api-key";
+const STORAGE_KEY_SET_META = "set-meta"; // { [setNum]: { name, imgUrl } }
 
 // Gemeinsame Farbpalette für Foto-Erkennung UND PDF-Teileliste, damit beide Seiten
 // dieselben Begriffe verwenden und der Abgleich nicht an unterschiedlichen Farbnamen scheitert.
@@ -87,6 +88,8 @@ export default function LegoScanner() {
   const [rebrickableKey, setRebrickableKey] = useState("");
   const [rebrickableKeyDraft, setRebrickableKeyDraft] = useState("");
   const [rebrickableLoadingFor, setRebrickableLoadingFor] = useState(null);
+  const [setMeta, setSetMeta] = useState({}); // { [setNum]: { name, imgUrl } }
+  const [expandedSetNum, setExpandedSetNum] = useState(null);
   const [pdfjsReady, setPdfjsReady] = useState(false);
   const [pdfjsFailed, setPdfjsFailed] = useState(false);
   const [pdfUploadingFor, setPdfUploadingFor] = useState(null); // setNum, während PDF verarbeitet wird
@@ -196,6 +199,10 @@ export default function LegoScanner() {
         }
       } catch (e) {}
       try {
+        const sm = await window.storage.get(STORAGE_KEY_SET_META);
+        if (sm) setSetMeta(JSON.parse(sm.value));
+      } catch (e) {}
+      try {
         const l = await window.storage.get(STORAGE_KEY_LOG);
         if (l) setLog(JSON.parse(l.value));
       } catch (e) {}
@@ -255,6 +262,49 @@ export default function LegoScanner() {
       await window.storage.set(STORAGE_KEY_RB_KEY, key);
     } catch (e) {}
   }
+
+  async function persistSetMeta(next) {
+    setSetMeta(next);
+    try {
+      await window.storage.set(STORAGE_KEY_SET_META, JSON.stringify(next));
+    } catch (e) {}
+  }
+
+  // Lädt Setname + Vorschaubild von Rebrickable (leichtgewichtiger Aufruf, keine Teileliste).
+  async function fetchSetMeta(setNum, currentMeta, currentKey) {
+    if (!currentKey || !currentKey.trim()) return;
+    if (currentMeta[setNum]) return; // schon vorhanden
+    try {
+      const res = await fetch(`/api/rebrickable?path=${encodeURIComponent(`/api/v3/lego/sets/${setNum}/`)}`, {
+        headers: { "x-rb-key": currentKey.trim() },
+      });
+      const data = await res.json();
+      if (!res.ok || !data.set_img_url) return;
+      persistSetMeta({ ...currentMeta, [setNum]: { name: data.name || "", imgUrl: data.set_img_url } });
+    } catch (e) {
+      // still - Vorschaubild ist rein optional
+    }
+  }
+
+  // Beim Start: für alle bereits eingetragenen Sets ohne Metadaten nachladen (nacheinander,
+  // um die API nicht zu überlasten).
+  useEffect(() => {
+    if (!rebrickableKey.trim() || mySets.length === 0) return;
+    let cancelled = false;
+    (async () => {
+      for (const s of mySets) {
+        if (cancelled) return;
+        if (!setMeta[s]) {
+          await fetchSetMeta(s, setMeta, rebrickableKey);
+          await new Promise((r) => setTimeout(r, 200));
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rebrickableKey, mySets.length]);
 
   // ---------- Teileliste direkt von Rebrickable laden (öffentliche, offizielle Datenbank) ----------
   // Umgeht die Unsicherheiten/Grenzen von KI-basierter Bild-Extraktion komplett: echte
@@ -396,6 +446,7 @@ export default function LegoScanner() {
     }
     persistSets([...mySets, normalized]);
     setNewSetInput("");
+    fetchSetMeta(normalized, setMeta, rebrickableKey);
   }
 
   function removeSet(setNum) {
@@ -409,6 +460,10 @@ export default function LegoScanner() {
     const nextImages = { ...partImages };
     delete nextImages[setNum];
     persistPartImages(nextImages);
+    const nextMeta = { ...setMeta };
+    delete nextMeta[setNum];
+    persistSetMeta(nextMeta);
+    if (expandedSetNum === setNum) setExpandedSetNum(null);
   }
 
   // ---------- Teileliste aus PDF-Bauanleitung extrahieren ----------
@@ -1239,6 +1294,8 @@ export default function LegoScanner() {
               {mySets.map((s) => {
                 const partsCount = (partsLists[s] || []).length;
                 const uploading = pdfUploadingFor === s;
+                const meta = setMeta[s];
+                const isExpanded = expandedSetNum === s;
                 return (
                   <div
                     key={s}
@@ -1246,127 +1303,183 @@ export default function LegoScanner() {
                       background: COLORS.panel,
                       border: `1px solid ${COLORS.panelBorder}`,
                       borderRadius: 10,
-                      padding: "10px 14px",
+                      overflow: "hidden",
                     }}
                   >
-                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-                      <span style={{ fontSize: 14, fontWeight: 600 }}>{s}</span>
-                      <button
-                        onClick={() => removeSet(s)}
-                        style={{ background: "transparent", border: "none", color: COLORS.textDim }}
-                        aria-label={`${s} entfernen`}
-                      >
-                        <X size={16} />
-                      </button>
-                    </div>
-                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginTop: 8 }}>
-                      {partsCount > 0 ? (
-                        <span style={{ fontSize: 12, color: COLORS.good, display: "flex", alignItems: "center", gap: 4 }}>
-                          <Check size={13} /> {partsCount} Teile hinterlegt
-                          {(partsListPages[s] || []).length > 0 ? " · inkl. Bildabgleich" : ""}
-                        </span>
-                      ) : (
-                        <span style={{ fontSize: 12, color: COLORS.textDim }}>Keine Teileliste</span>
-                      )}
-                      <button
-                        onClick={() => loadPartsListFromRebrickable(s)}
-                        disabled={rebrickableLoadingFor === s}
-                        style={{
-                          background: COLORS.accent,
-                          border: "none",
-                          borderRadius: 8,
-                          padding: "5px 10px",
-                          color: "#fff",
-                          fontSize: 12,
-                          fontWeight: 600,
-                          display: "flex",
-                          alignItems: "center",
-                          gap: 5,
-                        }}
-                      >
-                        {rebrickableLoadingFor === s ? (
-                          <>
-                            <Loader2 size={12} style={{ animation: "spin 1s linear infinite" }} /> Lädt...
-                          </>
-                        ) : (
-                          <>
-                            <Download size={12} /> {partsCount > 0 ? "Neu laden" : "Von Rebrickable laden"}
-                          </>
-                        )}
-                      </button>
-                    </div>
-                    <div style={{ display: "flex", alignItems: "center", gap: 6, margin: "8px 0" }}>
-                      <div style={{ flex: 1, height: 1, background: COLORS.panelBorder }} />
-                      <span style={{ fontSize: 10, color: COLORS.textDim }}>oder ohne Rebrickable-Key</span>
-                      <div style={{ flex: 1, height: 1, background: COLORS.panelBorder }} />
-                    </div>
-                    <div style={{ display: "flex", justifyContent: "flex-end" }}>
-                      <button
-                        onClick={() => triggerPdfUpload(s)}
-                        disabled={uploading}
-                        style={{
-                          background: "transparent",
-                          border: `1px solid ${COLORS.panelBorder}`,
-                          borderRadius: 8,
-                          padding: "5px 10px",
-                          color: COLORS.text,
-                          fontSize: 12,
-                          display: "flex",
-                          alignItems: "center",
-                          gap: 5,
-                        }}
-                      >
-                        {uploading ? (
-                          <>
-                            <Loader2 size={12} style={{ animation: "spin 1s linear infinite" }} /> Liest ein...
-                          </>
-                        ) : (
-                          <>
-                            <FileUp size={12} /> Anleitung (PDF)
-                          </>
-                        )}
-                      </button>
-                    </div>
-                    <input
-                      value={pageNumberInputs[s] || ""}
-                      onChange={(e) => setPageNumberInputs({ ...pageNumberInputs, [s]: e.target.value })}
-                      placeholder="Seiten der Teileliste, z.B. 12,13 (erforderlich)"
-                      style={{
-                        width: "100%",
-                        background: COLORS.bg,
-                        border: `1px solid ${COLORS.panelBorder}`,
-                        borderRadius: 7,
-                        padding: "7px 10px",
-                        color: COLORS.text,
-                        fontSize: 12,
-                        marginTop: 8,
-                      }}
-                    />
-                    <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 8 }}>
-                      <div style={{ flex: 1, height: 1, background: COLORS.panelBorder }} />
-                      <span style={{ fontSize: 10, color: COLORS.textDim }}>oder</span>
-                      <div style={{ flex: 1, height: 1, background: COLORS.panelBorder }} />
-                    </div>
                     <button
-                      onClick={() => triggerTeilelisteImageUpload(s)}
-                      disabled={uploading}
+                      onClick={() => setExpandedSetNum(isExpanded ? null : s)}
                       style={{
                         width: "100%",
-                        marginTop: 8,
-                        background: "transparent",
-                        border: `1px dashed ${COLORS.panelBorder}`,
-                        borderRadius: 8,
-                        padding: "8px 10px",
-                        color: COLORS.textDim,
-                        fontSize: 12,
                         display: "flex",
                         alignItems: "center",
-                        justifyContent: "center",
-                        gap: 5,
+                        gap: 10,
+                        padding: "10px 14px",
+                        background: "transparent",
+                        border: "none",
+                        textAlign: "left",
                       }}
                     >
-                      <Camera size={12} /> Teileliste als Screenshot/Foto hochladen (statt PDF-Seitenzahl)
+                      {meta?.imgUrl ? (
+                        <img
+                          src={meta.imgUrl}
+                          alt=""
+                          style={{ width: 36, height: 36, objectFit: "contain", borderRadius: 6, background: "#fff", flexShrink: 0 }}
+                        />
+                      ) : (
+                        <div
+                          style={{
+                            width: 36,
+                            height: 36,
+                            borderRadius: 6,
+                            background: COLORS.bg,
+                            display: "flex",
+                            alignItems: "center",
+                            justifyContent: "center",
+                            flexShrink: 0,
+                          }}
+                        >
+                          <Package size={16} color={COLORS.textDim} />
+                        </div>
+                      )}
+                      <span style={{ flex: 1, minWidth: 0 }}>
+                        <span style={{ fontSize: 14, fontWeight: 600, display: "block" }}>{s}</span>
+                        <span
+                          style={{
+                            fontSize: 11,
+                            color: partsCount > 0 ? COLORS.good : COLORS.textDim,
+                            display: "block",
+                            whiteSpace: "nowrap",
+                            overflow: "hidden",
+                            textOverflow: "ellipsis",
+                          }}
+                        >
+                          {partsCount > 0 ? `${partsCount} Teile hinterlegt` : "Keine Teileliste"}
+                        </span>
+                      </span>
+                      <X
+                        size={16}
+                        color={COLORS.textDim}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          removeSet(s);
+                        }}
+                        style={{ flexShrink: 0 }}
+                      />
+                      <ChevronRight
+                        size={16}
+                        color={COLORS.textDim}
+                        style={{ flexShrink: 0, transform: isExpanded ? "rotate(90deg)" : "none", transition: "transform 0.15s" }}
+                      />
                     </button>
+
+                    {isExpanded && (
+                      <div style={{ padding: "0 14px 14px" }}>
+                        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginTop: 4 }}>
+                          {(partsListPages[s] || []).length > 0 && (
+                            <span style={{ fontSize: 11, color: COLORS.good }}>inkl. Bildabgleich</span>
+                          )}
+                          <button
+                            onClick={() => loadPartsListFromRebrickable(s)}
+                            disabled={rebrickableLoadingFor === s}
+                            style={{
+                              marginLeft: "auto",
+                              background: COLORS.accent,
+                              border: "none",
+                              borderRadius: 8,
+                              padding: "5px 10px",
+                              color: "#fff",
+                              fontSize: 12,
+                              fontWeight: 600,
+                              display: "flex",
+                              alignItems: "center",
+                              gap: 5,
+                            }}
+                          >
+                            {rebrickableLoadingFor === s ? (
+                              <>
+                                <Loader2 size={12} style={{ animation: "spin 1s linear infinite" }} /> Lädt...
+                              </>
+                            ) : (
+                              <>
+                                <Download size={12} /> {partsCount > 0 ? "Neu laden" : "Von Rebrickable laden"}
+                              </>
+                            )}
+                          </button>
+                        </div>
+                        <div style={{ display: "flex", alignItems: "center", gap: 6, margin: "8px 0" }}>
+                          <div style={{ flex: 1, height: 1, background: COLORS.panelBorder }} />
+                          <span style={{ fontSize: 10, color: COLORS.textDim }}>oder ohne Rebrickable-Key</span>
+                          <div style={{ flex: 1, height: 1, background: COLORS.panelBorder }} />
+                        </div>
+                        <div style={{ display: "flex", justifyContent: "flex-end" }}>
+                          <button
+                            onClick={() => triggerPdfUpload(s)}
+                            disabled={uploading}
+                            style={{
+                              background: "transparent",
+                              border: `1px solid ${COLORS.panelBorder}`,
+                              borderRadius: 8,
+                              padding: "5px 10px",
+                              color: COLORS.text,
+                              fontSize: 12,
+                              display: "flex",
+                              alignItems: "center",
+                              gap: 5,
+                            }}
+                          >
+                            {uploading ? (
+                              <>
+                                <Loader2 size={12} style={{ animation: "spin 1s linear infinite" }} /> Liest ein...
+                              </>
+                            ) : (
+                              <>
+                                <FileUp size={12} /> Anleitung (PDF)
+                              </>
+                            )}
+                          </button>
+                        </div>
+                        <input
+                          value={pageNumberInputs[s] || ""}
+                          onChange={(e) => setPageNumberInputs({ ...pageNumberInputs, [s]: e.target.value })}
+                          placeholder="Seiten der Teileliste, z.B. 12,13 (erforderlich)"
+                          style={{
+                            width: "100%",
+                            background: COLORS.bg,
+                            border: `1px solid ${COLORS.panelBorder}`,
+                            borderRadius: 7,
+                            padding: "7px 10px",
+                            color: COLORS.text,
+                            fontSize: 12,
+                            marginTop: 8,
+                          }}
+                        />
+                        <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 8 }}>
+                          <div style={{ flex: 1, height: 1, background: COLORS.panelBorder }} />
+                          <span style={{ fontSize: 10, color: COLORS.textDim }}>oder</span>
+                          <div style={{ flex: 1, height: 1, background: COLORS.panelBorder }} />
+                        </div>
+                        <button
+                          onClick={() => triggerTeilelisteImageUpload(s)}
+                          disabled={uploading}
+                          style={{
+                            width: "100%",
+                            marginTop: 8,
+                            background: "transparent",
+                            border: `1px dashed ${COLORS.panelBorder}`,
+                            borderRadius: 8,
+                            padding: "8px 10px",
+                            color: COLORS.textDim,
+                            fontSize: 12,
+                            display: "flex",
+                            alignItems: "center",
+                            justifyContent: "center",
+                            gap: 5,
+                          }}
+                        >
+                          <Camera size={12} /> Teileliste als Screenshot/Foto hochladen (statt PDF-Seitenzahl)
+                        </button>
+                      </div>
+                    )}
                   </div>
                 );
               })}
