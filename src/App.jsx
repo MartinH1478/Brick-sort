@@ -783,7 +783,7 @@ export default function LegoScanner() {
                     "Format (kein anderes, kürzeres Format verwenden): " +
                     '{"sceneDescription": "kurze Beschreibung auf Deutsch, was insgesamt im Bild zu sehen ist (Gegenstände, Hintergrund, Beleuchtung)", "shapeName": "Fachbegriff MIT Maßen im Format AxB des Hauptteils, z.B. \'Stein 2x4\', \'Platte 1x2\', \'Fliese 2x2\', \'Dachstein 45° 2x2\' - oder null falls kein LEGO-Teil erkennbar ist", "colorName": "EXAKT eine Farbe aus dieser Liste, die am besten passt: ' +
                     LEGO_COLOR_PALETTE +
-                    '" + " - oder null", "elementIdGuess": "geschätzte LEGO Element-ID falls am Teil lesbar aufgedruckt, sonst null", "referenceBrickUsed": true oder false, "confidence": "high|medium|low|none - none nur wenn WIRKLICH kein LEGO-Teil im Bild ist"}',
+                    '" - oder null", "elementIdGuess": "geschätzte LEGO Element-ID falls am Teil lesbar aufgedruckt, sonst null", "referenceBrickUsed": true oder false, "confidence": "high|medium|low|none - none nur wenn WIRKLICH kein LEGO-Teil im Bild ist"}',
                 },
               ],
             },
