@@ -1084,6 +1084,14 @@ export default function LegoScanner() {
 
   // Liefert das Vergleichsbild für einen Treffer: zuerst das fest gespeicherte Teilbild,
   // sonst als Fallback die ganze Teileliste-Seite (falls vorhanden), sonst nichts.
+  // Wie viele Stück eines Teils noch fehlen (Sollmenge minus bereits Gesammeltes).
+  function getRemainingFor(setNum, idx) {
+    const entry = (partsLists[setNum] || [])[idx];
+    if (!entry) return null; // unbekannt -> keine Begrenzung möglich
+    const collected = (collectedCounts[setNum] || {})[idx] || 0;
+    return Math.max(0, (entry.qty || 0) - collected);
+  }
+
   function getMatchThumb(m) {
     const entry = (partsLists[m.setNum] || [])[m.index];
     if (entry?.imageUrl) return entry.imageUrl;
@@ -2125,7 +2133,7 @@ export default function LegoScanner() {
                     Gehört möglicherweise zu:
                   </div>
 
-                  <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 14, marginBottom: 12 }}>
+                  <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 14, marginBottom: 4 }}>
                     <span style={{ fontSize: 12, color: COLORS.textDim }}>Mehrere gleiche Teile?</span>
                     <button
                       onClick={() => setConfirmQty((q) => Math.max(1, q - 1))}
@@ -2145,22 +2153,38 @@ export default function LegoScanner() {
                       <Minus size={14} />
                     </button>
                     <span style={{ fontSize: 16, fontWeight: 700, minWidth: 20, textAlign: "center" }}>{confirmQty}</span>
-                    <button
-                      onClick={() => setConfirmQty((q) => q + 1)}
-                      style={{
-                        width: 30,
-                        height: 30,
-                        borderRadius: 8,
-                        background: COLORS.panel,
-                        border: `1px solid ${COLORS.panelBorder}`,
-                        color: COLORS.text,
-                        display: "flex",
-                        alignItems: "center",
-                        justifyContent: "center",
-                      }}
-                    >
-                      <Plus size={14} />
-                    </button>
+                    {(() => {
+                      const maxNeeded = Math.max(
+                        1,
+                        ...reviewingPhoto.candidateSets.map((m) => {
+                          const r = getRemainingFor(m.setNum, m.index);
+                          return r === null ? Infinity : r;
+                        })
+                      );
+                      const atMax = confirmQty >= maxNeeded;
+                      return (
+                        <button
+                          onClick={() => setConfirmQty((q) => Math.min(maxNeeded, q + 1))}
+                          disabled={atMax}
+                          style={{
+                            width: 30,
+                            height: 30,
+                            borderRadius: 8,
+                            background: COLORS.panel,
+                            border: `1px solid ${COLORS.panelBorder}`,
+                            color: atMax ? COLORS.panelBorder : COLORS.text,
+                            display: "flex",
+                            alignItems: "center",
+                            justifyContent: "center",
+                          }}
+                        >
+                          <Plus size={14} />
+                        </button>
+                      );
+                    })()}
+                  </div>
+                  <div style={{ textAlign: "center", fontSize: 11, color: COLORS.textDim, marginBottom: 12 }}>
+                    max. so viel wie laut Teileliste noch fehlt
                   </div>
 
                   <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 8 }}>
@@ -2169,7 +2193,11 @@ export default function LegoScanner() {
                       return (
                         <button
                           key={`${m.setNum}-${i}`}
-                          onClick={() => confirmAssignment(reviewingPhoto.id, m.setNum, m.index, m.matchedName, confirmQty)}
+                          onClick={() => {
+                            const remaining = getRemainingFor(m.setNum, m.index);
+                            const effectiveQty = remaining === null ? confirmQty : Math.min(confirmQty, Math.max(1, remaining));
+                            confirmAssignment(reviewingPhoto.id, m.setNum, m.index, m.matchedName, effectiveQty);
+                          }}
                           style={{
                             display: "flex",
                             justifyContent: "space-between",
@@ -2321,7 +2349,11 @@ export default function LegoScanner() {
                             return (
                               <button
                                 key={p.idx}
-                                onClick={() => confirmAssignment(reviewingPhoto.id, manualPickSet, p.idx, p.name, confirmQty)}
+                                onClick={() => {
+                                  const remaining = getRemainingFor(manualPickSet, p.idx);
+                                  const effectiveQty = remaining === null ? confirmQty : Math.min(confirmQty, Math.max(1, remaining));
+                                  confirmAssignment(reviewingPhoto.id, manualPickSet, p.idx, p.name, effectiveQty);
+                                }}
                                 style={{
                                   display: "flex",
                                   justifyContent: "space-between",
