@@ -774,22 +774,16 @@ export default function LegoScanner() {
                 {
                   type: "text",
                   text:
-                    "Das ist ein Foto von einem einzelnen LEGO-Teil. Rechts neben dem Teil liegt " +
-                    "möglicherweise ein bekannter Referenzstein zur Größenkalibrierung: ein Stein " +
-                    "1x2 (hochkant, Standardhöhe, \"dick\"). Falls dieser Referenzstein rechts im " +
-                    "Bild zu sehen ist, nutze ihn aktiv als Maßstab, um die Maße des zu " +
-                    "bestimmenden Teils präziser einzuschätzen (Vergleich der Noppenzahl/Kantenlänge " +
-                    "relativ zum bekannten 1x2-Referenzstein), statt die Größe nur aus der " +
-                    "Perspektive zu schätzen. " +
-                    "Wenn KEIN eindeutiges LEGO-Teil im Bild zu erkennen ist (z.B. komplett leeres/unscharfes " +
-                    "Bild), antworte NUR mit: {\"detected\": false, \"description\": \"kurze Beschreibung auf Deutsch, was du stattdessen im Bild siehst\"}. " +
-                    "Es ist VÖLLIG NORMAL und ERWARTET, " +
-                    "dass zwei Objekte im Bild sind (das zu bestimmende Teil UND der Referenzstein " +
-                    "rechts daneben) - das ist KEIN Grund für detected:false, sondern der Normalfall. " +
-                    "Wenn ein Teil klar erkennbar ist, antworte NUR mit einem JSON-Objekt ohne Markdown-Codeblock: " +
-                    '{"detected": true, "shapeName": "Fachbegriff MIT Maßen im Format AxB, z.B. \'Stein 2x4\', \'Platte 1x2\', \'Fliese 2x2\', \'Dachstein 45° 2x2\'", "colorName": "EXAKT eine Farbe aus dieser Liste, die am besten passt: ' +
+                    "Das ist ein Foto, das für die Sortierung von LEGO-Teilen aufgenommen wurde. " +
+                    "Im Bild sollte ein einzelnes LEGO-Teil zu sehen sein, eventuell mit einem " +
+                    "zusätzlichen kleinen Referenzstein (Stein 1x2, hochkant) rechts daneben zur " +
+                    "Größeneinschätzung - falls vorhanden, nutze ihn als Maßstab. " +
+                    "Beschreibe IMMER, was du im Bild siehst - auch wenn du dir nicht sicher bist. " +
+                    "Antworte NUR mit einem JSON-Objekt ohne Markdown-Codeblock, in GENAU diesem " +
+                    "Format (kein anderes, kürzeres Format verwenden): " +
+                    '{"sceneDescription": "kurze Beschreibung auf Deutsch, was insgesamt im Bild zu sehen ist (Gegenstände, Hintergrund, Beleuchtung)", "shapeName": "Fachbegriff MIT Maßen im Format AxB des Hauptteils, z.B. \'Stein 2x4\', \'Platte 1x2\', \'Fliese 2x2\', \'Dachstein 45° 2x2\' - oder null falls kein LEGO-Teil erkennbar ist", "colorName": "EXAKT eine Farbe aus dieser Liste, die am besten passt: ' +
                     LEGO_COLOR_PALETTE +
-                    '", "elementIdGuess": "geschätzte LEGO Element-ID falls am Teil lesbar aufgedruckt, sonst null", "referenceBrickUsed": true oder false - ob der 1x2-Referenzstein rechts im Bild erkennbar war und zur Kalibrierung genutzt wurde, "confidence": "high|medium|low"}',
+                    '" + " - oder null", "elementIdGuess": "geschätzte LEGO Element-ID falls am Teil lesbar aufgedruckt, sonst null", "referenceBrickUsed": true oder false, "confidence": "high|medium|low|none - none nur wenn WIRKLICH kein LEGO-Teil im Bild ist"}',
                 },
               ],
             },
@@ -805,16 +799,17 @@ export default function LegoScanner() {
       try {
         parsed = JSON.parse(clean);
       } catch (e) {
-        parsed = { detected: false };
+        parsed = { confidence: "none" };
         parseFailed = true;
       }
 
-      if (!parsed.detected) {
+      const notDetected = parseFailed || !parsed.shapeName || parsed.confidence === "none";
+      if (notDetected) {
         updatePhoto(id, { status: "no-part" });
         showToast(
           parseFailed
             ? `Unklare KI-Antwort: ${raw.slice(0, 150)}`
-            : `Kein Teil erkannt — KI sieht: ${parsed.description || "(keine Beschreibung)"}`,
+            : `Kein Teil erkannt — KI sieht: ${parsed.sceneDescription || "(keine Beschreibung)"}`,
           "warn"
         );
         return;
