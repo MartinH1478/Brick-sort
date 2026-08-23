@@ -604,10 +604,9 @@ export default function LegoScanner() {
         audio: false,
       });
       streamRef.current = stream;
-      if (videoRef.current) {
-        videoRef.current.srcObject = stream;
-        await videoRef.current.play();
-      }
+      // Das <video>-Element existiert erst NACHDEM liveMode true wird und React neu gerendert
+      // hat - den Stream deshalb nicht hier direkt zuweisen (videoRef.current ist noch null),
+      // sondern im useEffect unten, der auf liveMode reagiert.
       setLiveMode(true);
       setLiveScanning(true);
       liveScanningRef.current = true;
@@ -616,6 +615,14 @@ export default function LegoScanner() {
       setCameraError("Kamera konnte nicht gestartet werden. Bitte Kamerazugriff im Browser erlauben.");
     }
   }
+
+  // Hängt den Kamera-Stream an das <video>-Element an, sobald es tatsächlich im DOM existiert.
+  useEffect(() => {
+    if (liveMode && streamRef.current && videoRef.current) {
+      videoRef.current.srcObject = streamRef.current;
+      videoRef.current.play().catch(() => {});
+    }
+  }, [liveMode]);
 
   function stopLiveCamera() {
     if (streamRef.current) {
@@ -1587,7 +1594,15 @@ export default function LegoScanner() {
                     overflow: "hidden",
                   }}
                 >
-                  <video ref={videoRef} playsInline muted style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+                  <video
+                    ref={videoRef}
+                    playsInline
+                    muted
+                    autoPlay
+                    onLoadedMetadata={() => videoRef.current?.play().catch(() => {})}
+                    onClick={() => videoRef.current?.play().catch(() => {})}
+                    style={{ width: "100%", height: "100%", objectFit: "cover" }}
+                  />
                   <canvas ref={liveCanvasRef} style={{ display: "none" }} />
                   <div
                     style={{
@@ -1633,6 +1648,22 @@ export default function LegoScanner() {
                     }}
                   >
                     {photos.some((p) => p.status === "reviewing") ? "Pausiert — Treffer bestätigen" : "Scan läuft"}
+                  </div>
+                  <div
+                    style={{
+                      position: "absolute",
+                      bottom: 10,
+                      left: 10,
+                      right: 10,
+                      textAlign: "center",
+                      background: "rgba(0,0,0,0.55)",
+                      borderRadius: 10,
+                      padding: "5px 8px",
+                      fontSize: 10,
+                      color: "rgba(255,255,255,0.7)",
+                    }}
+                  >
+                    Bleibt das Bild schwarz? Einmal auf das Bild tippen.
                   </div>
                 </div>
                 <button
