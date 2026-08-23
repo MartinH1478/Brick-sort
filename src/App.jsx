@@ -104,6 +104,7 @@ export default function LegoScanner() {
   const [manualPickSet, setManualPickSet] = useState(null); // setNum während manueller Teilauswahl
   const [manualFilter, setManualFilter] = useState("");
   const [manualOverride, setManualOverride] = useState(false); // true = manuelle Liste zeigen, obwohl ein Treffer da ist
+  const [confirmQty, setConfirmQty] = useState(1); // Menge, die bei Bestätigung zugeordnet wird (falls mehrere gleiche Teile vorliegen)
   const [pageNumberInputs, setPageNumberInputs] = useState({}); // { [setNum]: "12,13" } manuelle Seitenangabe
 
   const [photos, setPhotos] = useState([]); // Warteschlange, siehe makePhotoItem
@@ -1010,28 +1011,30 @@ export default function LegoScanner() {
     }
   }
 
-  function confirmAssignment(id, setNum, partIndex, matchedName) {
+  function confirmAssignment(id, setNum, partIndex, matchedName, qty = 1) {
     const photo = photos.find((p) => p.id === id);
     const entry = {
       id: Date.now(),
       shapeName: matchedName || photo?.result?.shapeName || "Unbekanntes Teil",
       colorName: photo?.result?.colorName || "",
       setNum,
+      qty,
       time: new Date().toLocaleString("de-DE"),
     };
     persistLog([entry, ...log]);
 
     if (partIndex !== null && partIndex !== undefined) {
       const setCounts = { ...(collectedCounts[setNum] || {}) };
-      setCounts[partIndex] = (setCounts[partIndex] || 0) + 1;
+      setCounts[partIndex] = (setCounts[partIndex] || 0) + qty;
       persistCollectedCounts({ ...collectedCounts, [setNum]: setCounts });
     }
 
-    showToast(`Zugeordnet zu ${setNum}`, "good");
+    showToast(qty > 1 ? `${qty}x zugeordnet zu ${setNum}` : `Zugeordnet zu ${setNum}`, "good");
     updatePhoto(id, { status: "done" });
     setManualPickSet(null);
     setManualFilter("");
     setManualOverride(false);
+    setConfirmQty(1);
   }
 
   function skipAssignment(id) {
@@ -1042,6 +1045,11 @@ export default function LegoScanner() {
   }
 
   const reviewingPhoto = photos.find((p) => p.status === "reviewing");
+
+  useEffect(() => {
+    setConfirmQty(1);
+  }, [reviewingPhoto?.id]);
+
   const pendingCount = photos.filter((p) => p.status === "pending" || p.status === "analyzing").length;
   const doneCount = photos.filter((p) => p.status === "done" || p.status === "no-part").length;
 
@@ -2116,13 +2124,52 @@ export default function LegoScanner() {
                   <div style={{ fontSize: 13, color: COLORS.textDim, marginBottom: 8 }}>
                     Gehört möglicherweise zu:
                   </div>
+
+                  <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 14, marginBottom: 12 }}>
+                    <span style={{ fontSize: 12, color: COLORS.textDim }}>Mehrere gleiche Teile?</span>
+                    <button
+                      onClick={() => setConfirmQty((q) => Math.max(1, q - 1))}
+                      disabled={confirmQty <= 1}
+                      style={{
+                        width: 30,
+                        height: 30,
+                        borderRadius: 8,
+                        background: COLORS.panel,
+                        border: `1px solid ${COLORS.panelBorder}`,
+                        color: confirmQty <= 1 ? COLORS.panelBorder : COLORS.text,
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                      }}
+                    >
+                      <Minus size={14} />
+                    </button>
+                    <span style={{ fontSize: 16, fontWeight: 700, minWidth: 20, textAlign: "center" }}>{confirmQty}</span>
+                    <button
+                      onClick={() => setConfirmQty((q) => q + 1)}
+                      style={{
+                        width: 30,
+                        height: 30,
+                        borderRadius: 8,
+                        background: COLORS.panel,
+                        border: `1px solid ${COLORS.panelBorder}`,
+                        color: COLORS.text,
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                      }}
+                    >
+                      <Plus size={14} />
+                    </button>
+                  </div>
+
                   <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 8 }}>
                     {reviewingPhoto.candidateSets.map((m, i) => {
                       const thumb = getMatchThumb(m);
                       return (
                         <button
                           key={`${m.setNum}-${i}`}
-                          onClick={() => confirmAssignment(reviewingPhoto.id, m.setNum, m.index, m.matchedName)}
+                          onClick={() => confirmAssignment(reviewingPhoto.id, m.setNum, m.index, m.matchedName, confirmQty)}
                           style={{
                             display: "flex",
                             justifyContent: "space-between",
@@ -2157,7 +2204,7 @@ export default function LegoScanner() {
                             />
                           )}
                           <span style={{ flex: 1 }}>
-                            {m.setNum}
+                            {confirmQty > 1 ? `${confirmQty}x ` : ""}{m.setNum}
                             {m.matchedName && (
                               <span style={{ display: "block", fontSize: 12, fontWeight: 400, color: COLORS.textDim }}>
                                 {m.matchedName}
@@ -2274,7 +2321,7 @@ export default function LegoScanner() {
                             return (
                               <button
                                 key={p.idx}
-                                onClick={() => confirmAssignment(reviewingPhoto.id, manualPickSet, p.idx, p.name)}
+                                onClick={() => confirmAssignment(reviewingPhoto.id, manualPickSet, p.idx, p.name, confirmQty)}
                                 style={{
                                   display: "flex",
                                   justifyContent: "space-between",
@@ -2307,7 +2354,7 @@ export default function LegoScanner() {
                           })}
                       </div>
                       <button
-                        onClick={() => confirmAssignment(reviewingPhoto.id, manualPickSet, null, null)}
+                        onClick={() => confirmAssignment(reviewingPhoto.id, manualPickSet, null, null, confirmQty)}
                         style={{
                           width: "100%",
                           background: "transparent",
