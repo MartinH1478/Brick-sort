@@ -648,13 +648,13 @@ export default function LegoScanner() {
     const video = videoRef.current;
     const canvas = liveCanvasRef.current;
     if (!video || !canvas || video.videoWidth === 0) return;
-    const targetW = 640;
-    const scale = targetW / video.videoWidth;
-    canvas.width = targetW;
+    const targetW = 1024;
+    const scale = Math.min(1, targetW / video.videoWidth);
+    canvas.width = video.videoWidth * scale;
     canvas.height = video.videoHeight * scale;
     const ctx = canvas.getContext("2d");
     ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-    const base64 = canvas.toDataURL("image/jpeg", 0.8).split(",")[1];
+    const base64 = canvas.toDataURL("image/jpeg", 0.85).split(",")[1];
 
     setLiveAnalyzing(true);
     setTimeout(() => setLiveAnalyzing(false), 800); // kurzes visuelles Feedback im UI
@@ -689,14 +689,14 @@ export default function LegoScanner() {
       const reader = new FileReader();
       reader.onload = () => {
         img.onload = () => {
-          const targetW = 640;
+          const targetW = 1200;
           const scale = Math.min(1, targetW / img.width);
           const canvas = document.createElement("canvas");
           canvas.width = img.width * scale;
           canvas.height = img.height * scale;
           const ctx = canvas.getContext("2d");
           ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-          resolve(canvas.toDataURL("image/jpeg", 0.8).split(",")[1]);
+          resolve(canvas.toDataURL("image/jpeg", 0.85).split(",")[1]);
         };
         img.onerror = reject;
         img.src = reader.result;
@@ -781,7 +781,10 @@ export default function LegoScanner() {
                     "bestimmenden Teils präziser einzuschätzen (Vergleich der Noppenzahl/Kantenlänge " +
                     "relativ zum bekannten 1x2-Referenzstein), statt die Größe nur aus der " +
                     "Perspektive zu schätzen. " +
-                    "Wenn KEIN eindeutiges, klar erkennbares einzelnes LEGO-Teil im Bild ist, antworte NUR mit: {\"detected\": false}. " +
+                    "Wenn KEIN eindeutiges LEGO-Teil im Bild zu erkennen ist (z.B. komplett leeres/unscharfes " +
+                    "Bild), antworte NUR mit: {\"detected\": false}. Es ist VÖLLIG NORMAL und ERWARTET, " +
+                    "dass zwei Objekte im Bild sind (das zu bestimmende Teil UND der Referenzstein " +
+                    "rechts daneben) - das ist KEIN Grund für detected:false, sondern der Normalfall. " +
                     "Wenn ein Teil klar erkennbar ist, antworte NUR mit einem JSON-Objekt ohne Markdown-Codeblock: " +
                     '{"detected": true, "shapeName": "Fachbegriff MIT Maßen im Format AxB, z.B. \'Stein 2x4\', \'Platte 1x2\', \'Fliese 2x2\', \'Dachstein 45° 2x2\'", "colorName": "EXAKT eine Farbe aus dieser Liste, die am besten passt: ' +
                     LEGO_COLOR_PALETTE +
