@@ -105,6 +105,9 @@ export default function LegoScanner() {
   const [manualFilter, setManualFilter] = useState("");
   const [manualOverride, setManualOverride] = useState(false); // true = manuelle Liste zeigen, obwohl ein Treffer da ist
   const [confirmQty, setConfirmQty] = useState(1); // Menge, die bei Bestätigung zugeordnet wird (falls mehrere gleiche Teile vorliegen)
+  const [editingResult, setEditingResult] = useState(false);
+  const [editShapeName, setEditShapeName] = useState("");
+  const [editColorName, setEditColorName] = useState("");
   const [pageNumberInputs, setPageNumberInputs] = useState({}); // { [setNum]: "12,13" } manuelle Seitenangabe
 
   const [photos, setPhotos] = useState([]); // Warteschlange, siehe makePhotoItem
@@ -829,13 +832,13 @@ export default function LegoScanner() {
     setPhotos((prev) => prev.map((p) => (p.id === id ? { ...p, ...patch } : p)));
   }
 
-  async function analyzePhoto(id) {
+  async function analyzePhoto(id, model = "claude-haiku-4-5-20251001") {
     updatePhoto(id, { status: "analyzing" });
     const photo = photos.find((p) => p.id === id);
     if (!photo) return;
 
     setLastDebugRequest(
-      `Bild-Größe (base64): ${Math.round((photo.base64.length * 0.75) / 1024)} KB · gesendet um ${new Date().toLocaleTimeString("de-DE")}`
+      `Bild-Größe (base64): ${Math.round((photo.base64.length * 0.75) / 1024)} KB · Modell: ${model} · gesendet um ${new Date().toLocaleTimeString("de-DE")}`
     );
 
     try {
@@ -843,7 +846,7 @@ export default function LegoScanner() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          model: "claude-haiku-4-5-20251001",
+          model,
           max_tokens: 300,
           messages: [
             {
@@ -1155,6 +1158,28 @@ export default function LegoScanner() {
     await matchAgainstSetsAI(id, photo.result, triedSets);
   }
 
+  // Nochmal mit einem stärkeren (teureren) Modell prüfen - nur für Problemfälle gedacht,
+  // z.B. Dachsteine/Schrägen, bei denen Haiku öfter danebenliegt.
+  async function reanalyzeWithBetterModel(id) {
+    showToast("Prüfe nochmal mit stärkerem Modell...", "info");
+    await analyzePhoto(id, "claude-sonnet-4-6");
+  }
+
+  // Übernimmt eine manuelle Korrektur von Form/Farbe (z.B. bei Dachsteinen, deren Maße die
+  // KI öfter falsch einschätzt) und startet den Abgleich mit den korrigierten Werten neu.
+  async function applyResultCorrection(id) {
+    const photo = photos.find((p) => p.id === id);
+    if (!photo) return;
+    const correctedResult = {
+      ...photo.result,
+      shapeName: editShapeName.trim() || photo.result.shapeName,
+      colorName: editColorName || photo.result.colorName,
+    };
+    updatePhoto(id, { result: correctedResult, matchStatus: "checking", triedSets: [] });
+    setEditingResult(false);
+    await matchAgainstSetsAI(id, correctedResult);
+  }
+
   function confirmAssignment(id, setNum, partIndex, matchedName, qty = 1) {
     const photo = photos.find((p) => p.id === id);
     const entry = {
@@ -1192,6 +1217,7 @@ export default function LegoScanner() {
 
   useEffect(() => {
     setConfirmQty(1);
+    setEditingResult(false);
   }, [reviewingPhoto?.id]);
 
   const pendingCount = photos.filter((p) => p.status === "pending" || p.status === "analyzing").length;
@@ -2248,21 +2274,124 @@ export default function LegoScanner() {
                   style={{ width: "100%", height: 160, objectFit: "cover" }}
                 />
                 <div style={{ padding: 16 }}>
-                  <div style={{ fontSize: 11, color: COLORS.textDim, fontWeight: 700, marginBottom: 4 }}>
-                    ERKANNT
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
+                    <div style={{ fontSize: 11, color: COLORS.textDim, fontWeight: 700, marginBottom: 4 }}>
+                      ERKANNT
+                    </div>
+                    {!editingResult && (
+                      <button
+                        onClick={() => {
+                          setEditShapeName(reviewingPhoto.result.shapeName || "");
+                          setEditColorName(reviewingPhoto.result.colorName || "");
+                          setEditingResult(true);
+                        }}
+                        style={{ background: "transparent", border: "none", color: COLORS.textDim, fontSize: 11, padding: 0 }}
+                      >
+                        ✏️ Korrigieren
+                      </button>
+                    )}
                   </div>
-                  <div style={{ fontSize: 18, fontWeight: 800 }}>{reviewingPhoto.result.shapeName}</div>
-                  <div style={{ fontSize: 14, color: COLORS.textDim, marginTop: 2 }}>
-                    {reviewingPhoto.result.colorName}
-                    {reviewingPhoto.result.elementIdGuess
-                      ? ` · vermutl. ID ${reviewingPhoto.result.elementIdGuess}`
-                      : ""}
-                  </div>
-                  <div style={{ fontSize: 11, marginTop: 6, color: reviewingPhoto.result.referenceBrickUsed ? COLORS.good : COLORS.textDim }}>
-                    {reviewingPhoto.result.referenceBrickUsed
-                      ? "✓ Referenzstein erkannt und zur Kalibrierung genutzt"
-                      : "Kein Referenzstein im Bild erkannt"}
-                  </div>
+
+                  {editingResult ? (
+                    <div style={{ marginTop: 4 }}>
+                      <input
+                        value={editShapeName}
+                        onChange={(e) => setEditShapeName(e.target.value)}
+                        placeholder="z.B. Dachstein 45° 2x3"
+                        style={{
+                          width: "100%",
+                          background: COLORS.bg,
+                          border: `1px solid ${COLORS.panelBorder}`,
+                          borderRadius: 8,
+                          padding: "9px 10px",
+                          color: COLORS.text,
+                          fontSize: 15,
+                          marginBottom: 8,
+                        }}
+                      />
+                      <select
+                        value={editColorName}
+                        onChange={(e) => setEditColorName(e.target.value)}
+                        style={{
+                          width: "100%",
+                          background: COLORS.bg,
+                          border: `1px solid ${COLORS.panelBorder}`,
+                          borderRadius: 8,
+                          padding: "9px 10px",
+                          color: COLORS.text,
+                          fontSize: 14,
+                          marginBottom: 10,
+                        }}
+                      >
+                        {LEGO_COLOR_PALETTE.split(", ").map((c) => (
+                          <option key={c} value={c}>
+                            {c}
+                          </option>
+                        ))}
+                      </select>
+                      <div style={{ display: "flex", gap: 8 }}>
+                        <button
+                          onClick={() => setEditingResult(false)}
+                          style={{
+                            flex: 1,
+                            background: "transparent",
+                            border: `1px solid ${COLORS.panelBorder}`,
+                            borderRadius: 8,
+                            padding: 10,
+                            color: COLORS.textDim,
+                            fontSize: 13,
+                          }}
+                        >
+                          Abbrechen
+                        </button>
+                        <button
+                          onClick={() => applyResultCorrection(reviewingPhoto.id)}
+                          style={{
+                            flex: 1,
+                            background: COLORS.accent,
+                            border: "none",
+                            borderRadius: 8,
+                            padding: 10,
+                            color: "#fff",
+                            fontWeight: 600,
+                            fontSize: 13,
+                          }}
+                        >
+                          Übernehmen & neu abgleichen
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <>
+                      <div style={{ fontSize: 18, fontWeight: 800 }}>{reviewingPhoto.result.shapeName}</div>
+                      <div style={{ fontSize: 14, color: COLORS.textDim, marginTop: 2 }}>
+                        {reviewingPhoto.result.colorName}
+                        {reviewingPhoto.result.elementIdGuess
+                          ? ` · vermutl. ID ${reviewingPhoto.result.elementIdGuess}`
+                          : ""}
+                      </div>
+                      <div style={{ fontSize: 11, marginTop: 6, color: reviewingPhoto.result.referenceBrickUsed ? COLORS.good : COLORS.textDim }}>
+                        {reviewingPhoto.result.referenceBrickUsed
+                          ? "✓ Referenzstein erkannt und zur Kalibrierung genutzt"
+                          : "Kein Referenzstein im Bild erkannt"}
+                      </div>
+                      <button
+                        onClick={() => reanalyzeWithBetterModel(reviewingPhoto.id)}
+                        style={{
+                          marginTop: 10,
+                          background: "transparent",
+                          border: `1px dashed ${COLORS.panelBorder}`,
+                          borderRadius: 8,
+                          padding: "7px 10px",
+                          color: COLORS.textDim,
+                          fontSize: 11,
+                          width: "100%",
+                        }}
+                      >
+                        🔍 Nochmal mit besserem (teurerem) Modell prüfen
+                      </button>
+                    </>
+                  )}
                 </div>
               </div>
 
