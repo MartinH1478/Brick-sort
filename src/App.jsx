@@ -859,11 +859,21 @@ export default function LegoScanner() {
                     "Das ist ein Foto, das für die Sortierung von LEGO-Teilen aufgenommen wurde. " +
                     "Im Bild sollte ein einzelnes LEGO-Teil zu sehen sein, eventuell mit einem " +
                     "zusätzlichen kleinen Referenzstein (Stein 1x2, hochkant) rechts daneben zur " +
-                    "Größeneinschätzung - falls vorhanden, nutze ihn als Maßstab. " +
+                    "Größeneinschätzung. WICHTIG für die Maßbestimmung: Falls das Teil auf einer LEGO-" +
+                    "Bauplatte (mit sichtbarem Noppenraster) liegt, ist das der ZUVERLÄSSIGSTE Maßstab - " +
+                    "zähl dann, wie viele Noppen-Abstände der Bauplatte die GRUNDFLÄCHE des Teils in " +
+                    "Länge und Breite einnimmt (nicht nur die sichtbaren Noppen obenauf zählen!). Bei " +
+                    "schrägen Teilen (Dachsteine, Keilsteine u.ä.) bezieht sich die Maßangabe IMMER auf " +
+                    "die rechteckige GRUNDFLÄCHE, so wie das Teil auf einer Bauplatte aufliegen würde - " +
+                    "diese ist oft GRÖSSER als die Anzahl der sichtbaren Noppen an der Oberseite (z.B. " +
+                    "kann ein Dachstein mit nur 1-2 sichtbaren Noppen trotzdem eine 2x3-Grundfläche " +
+                    "haben). Schau dir die komplette Silhouette/Umriss des Teils von oben an, nicht nur " +
+                    "die Noppen. Falls kein Bauplatten-Raster sichtbar ist, nutze ersatzweise den " +
+                    "Referenzstein als Maßstab. " +
                     "Beschreibe IMMER, was du im Bild siehst - auch wenn du dir nicht sicher bist. " +
                     "Antworte NUR mit einem JSON-Objekt ohne Markdown-Codeblock, in GENAU diesem " +
                     "Format (kein anderes, kürzeres Format verwenden): " +
-                    '{"sceneDescription": "kurze Beschreibung auf Deutsch, was insgesamt im Bild zu sehen ist (Gegenstände, Hintergrund, Beleuchtung)", "shapeName": "Fachbegriff MIT Maßen im Format AxB des Hauptteils, z.B. \'Stein 2x4\', \'Platte 1x2\', \'Fliese 2x2\', \'Dachstein 45° 2x2\' - oder null falls kein LEGO-Teil erkennbar ist", "colorName": "EXAKT eine Farbe aus dieser Liste, die am besten passt: ' +
+                    '{"sceneDescription": "kurze Beschreibung auf Deutsch, was insgesamt im Bild zu sehen ist (Gegenstände, Hintergrund, Beleuchtung, ob eine Bauplatte mit Raster sichtbar ist)", "shapeName": "Fachbegriff MIT Maßen im Format AxB des Hauptteils (Grundfläche!), z.B. \'Stein 2x4\', \'Platte 1x2\', \'Fliese 2x2\', \'Dachstein 45° 2x3\' - oder null falls kein LEGO-Teil erkennbar ist", "colorName": "EXAKT eine Farbe aus dieser Liste, die am besten passt: ' +
                     LEGO_COLOR_PALETTE +
                     '" - oder null", "elementIdGuess": "geschätzte LEGO Element-ID falls am Teil lesbar aufgedruckt, sonst null", "referenceBrickUsed": true oder false, "confidence": "high|medium|low|none - none nur wenn WIRKLICH kein LEGO-Teil im Bild ist"}',
                 },
@@ -2143,8 +2153,9 @@ export default function LegoScanner() {
                     padding: "8px 10px",
                   }}
                 >
-                  💡 Tipp: Leg einen bekannten Stein 1x2 (hoch, "dick") als Größenvergleich immer
-                  rechts neben das Teil — das hilft bei der Maßeinschätzung deutlich.
+                  💡 Bester Tipp: Leg das Teil auf eine LEGO-Bauplatte (Noppenraster als Maßstab —
+                  genauer als alles andere). Ohne Bauplatte: Referenzstein 1x2 (hoch, "dick") rechts
+                  daneben legen.
                 </p>
                 <button
                   onClick={takePhoto}
