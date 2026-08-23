@@ -896,7 +896,13 @@ export default function LegoScanner() {
                     "der Textbeschreibung, welche Einträge plausibel genau dieses Teil sein könnten - " +
                     "auch wenn die Formulierung leicht abweicht (z.B. 'Winkelplatte' = 'Eckplatte', " +
                     "unterschiedliche Wortstellung, Abkürzungen). Berücksichtige Form, Maße UND Farbe " +
-                    "gemeinsam, nicht nur eines davon. Gib NUR plausible Treffer zurück, keine Zwangszuordnung.\n\n" +
+                    "gemeinsam, nicht nur eines davon. " +
+                    "WICHTIG zur Priorität: Die Sets unten stehen in der Reihenfolge, in der der Nutzer " +
+                    "sie eingetragen hat - das ERSTE Set hat Priorität. Wenn im ersten Set ein plausibler " +
+                    "Treffer existiert, gib NUR diesen einen Treffer zurück (nicht zusätzlich Treffer aus " +
+                    "späteren Sets) - so wird ein Set nach dem anderen vervollständigt statt Teile über " +
+                    "mehrere Sets zu verteilen. Prüfe spätere Sets NUR, wenn im ersten Set kein " +
+                    "plausibler Treffer existiert. Gib NUR plausible Treffer zurück, keine Zwangszuordnung.\n\n" +
                     listsText +
                     "\n\nAntworte NUR mit einem JSON-Array ohne Markdown-Codeblock, ein Eintrag pro " +
                     "plausiblem Treffer (leeres Array [] falls keiner passt), Format: " +
@@ -1563,6 +1569,7 @@ export default function LegoScanner() {
                         .sort((a, b) => a.missing - b.missing) // fehlende zuerst
                         .map((r) => {
                           const found = r.missing === 0;
+                          const partial = !found && r.collected > 0;
                           return (
                             <div
                               key={r.idx}
@@ -1579,8 +1586,17 @@ export default function LegoScanner() {
                                 {found && <Check size={12} />}
                                 {r.name} · {r.colorName}
                               </span>
-                              <span style={{ color: found ? COLORS.good : COLORS.warn, fontWeight: 600 }}>
-                                {found ? `${r.collected}/${r.qty}` : `fehlen ${r.missing}`}
+                              <span style={{ fontWeight: 600 }}>
+                                {found ? (
+                                  <span style={{ color: COLORS.good }}>{r.collected}/{r.qty}</span>
+                                ) : (
+                                  <>
+                                    <span style={{ color: partial ? COLORS.good : COLORS.textDim }}>{r.collected}</span>
+                                    <span style={{ color: COLORS.textDim, fontWeight: 400 }}> von </span>
+                                    <span style={{ color: COLORS.textDim, fontWeight: 400 }}>{r.qty} gefunden</span>
+                                    <span style={{ color: COLORS.warn }}> · {r.missing} fehlen</span>
+                                  </>
+                                )}
                                 {!found && r.elementId ? ` (ID ${r.elementId})` : ""}
                               </span>
                             </div>
