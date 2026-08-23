@@ -799,7 +799,7 @@ export default function LegoScanner() {
       });
       const data = await response.json();
       const textBlock = (data.content || []).find((b) => b.type === "text");
-      const raw = textBlock ? textBlock.text.trim() : "{}";
+      const raw = textBlock ? textBlock.text.trim() : `KEIN TEXT IN ANTWORT — volle Server-Antwort: ${JSON.stringify(data).slice(0, 400)}`;
       const clean = raw.replace(/```json|```/g, "").trim();
       let parsed;
       let parseFailed = false;
@@ -909,7 +909,7 @@ export default function LegoScanner() {
       });
       const data = await response.json();
       const textBlock = (data.content || []).find((b) => b.type === "text");
-      const raw = textBlock ? textBlock.text.trim() : "[]";
+      const raw = textBlock ? textBlock.text.trim() : `KEIN TEXT IN ANTWORT — volle Server-Antwort: ${JSON.stringify(data).slice(0, 400)}`;
       const clean = raw.replace(/```json|```/g, "").trim();
       let matches;
       try {
@@ -918,6 +918,7 @@ export default function LegoScanner() {
       } catch (e) {
         matches = [];
       }
+      setLastDebugResponse(`[Abgleich] ${raw}`);
 
       updatePhoto(id, {
         matchStatus: matches.length > 0 ? "found" : "none",
