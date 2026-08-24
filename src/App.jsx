@@ -99,6 +99,7 @@ export default function LegoScanner() {
   const [searchCategoryFilter, setSearchCategoryFilter] = useState("all");
   const [searchOnlyOpen, setSearchOnlyOpen] = useState(true);
   const [searchShowCount, setSearchShowCount] = useState(60);
+  const [expandedSearchGroup, setExpandedSearchGroup] = useState(null);
   const [pdfjsReady, setPdfjsReady] = useState(false);
   const [pdfjsFailed, setPdfjsFailed] = useState(false);
   const [pdfUploadingFor, setPdfUploadingFor] = useState(null); // setNum, während PDF verarbeitet wird
@@ -1011,6 +1012,7 @@ export default function LegoScanner() {
       name.includes("lightsaber")
     )
       return "Weapon";
+    if (name.includes("slope") || name.includes("wedge")) return "Sloped";
     if (name.startsWith("plate") || name.includes(" plate")) return "Plate";
     if (name.startsWith("tile") || name.includes(" tile")) return "Tile";
     if (name.startsWith("brick") || name.includes(" brick")) return "Brick";
@@ -2220,6 +2222,7 @@ export default function LegoScanner() {
                     <option value="Tile">Tile</option>
                     <option value="Wheel">Wheel</option>
                     <option value="Weapon">Weapon</option>
+                    <option value="Sloped">Sloped</option>
                     <option value="Technic">Technic</option>
                     <option value="Figur">Figur</option>
                     <option value="Sonstiges">Sonstiges</option>
@@ -2303,114 +2306,150 @@ export default function LegoScanner() {
                         {groups.length} Teile-Arten · {results.length} Zeilen über alle Sets
                       </div>
                       <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-                        {visible.map((g) => (
-                          <div
-                            key={`${g.name}|||${g.colorName}`}
-                            style={{
-                              background: COLORS.panel,
-                              border: `1px solid ${COLORS.panelBorder}`,
-                              borderRadius: 10,
-                              padding: 10,
-                            }}
-                          >
-                            <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: g.sets.length > 0 ? 10 : 0 }}>
-                              {g.imageUrl ? (
-                                <img
-                                  src={g.imageUrl}
-                                  alt=""
-                                  style={{ width: 56, height: 56, objectFit: "contain", borderRadius: 8, background: "#fff", flexShrink: 0 }}
-                                />
-                              ) : (
+                        {visible.map((g) => {
+                          const groupKey = `${g.name}|||${g.colorName}`;
+                          const isOpen = expandedSearchGroup === groupKey;
+                          return (
+                            <div
+                              key={groupKey}
+                              style={{
+                                background: COLORS.panel,
+                                border: `1px solid ${COLORS.panelBorder}`,
+                                borderRadius: 10,
+                                overflow: "hidden",
+                              }}
+                            >
+                              <button
+                                onClick={() => setExpandedSearchGroup(isOpen ? null : groupKey)}
+                                style={{
+                                  width: "100%",
+                                  display: "flex",
+                                  alignItems: "center",
+                                  gap: 12,
+                                  padding: 10,
+                                  background: "transparent",
+                                  border: "none",
+                                  textAlign: "left",
+                                }}
+                              >
+                                {g.imageUrl ? (
+                                  <img
+                                    src={g.imageUrl}
+                                    alt=""
+                                    style={{ width: 56, height: 56, objectFit: "contain", borderRadius: 8, background: "#fff", flexShrink: 0 }}
+                                  />
+                                ) : (
+                                  <div
+                                    style={{
+                                      width: 56,
+                                      height: 56,
+                                      borderRadius: 8,
+                                      background: COLORS.bg,
+                                      display: "flex",
+                                      alignItems: "center",
+                                      justifyContent: "center",
+                                      flexShrink: 0,
+                                    }}
+                                  >
+                                    <Package size={20} color={COLORS.textDim} />
+                                  </div>
+                                )}
+                                <div style={{ flex: 1, minWidth: 0 }}>
+                                  <div style={{ fontSize: 14, fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                                    {g.name}
+                                  </div>
+                                  <div style={{ fontSize: 12, color: COLORS.textDim, marginTop: 2 }}>
+                                    {g.colorName} · in {g.sets.length} {g.sets.length === 1 ? "Set" : "Sets"}
+                                  </div>
+                                </div>
                                 <div
                                   style={{
-                                    width: 56,
-                                    height: 56,
+                                    width: 30,
+                                    height: 30,
                                     borderRadius: 8,
-                                    background: COLORS.bg,
+                                    background: isOpen ? COLORS.bg : COLORS.accent,
+                                    border: isOpen ? `1px solid ${COLORS.panelBorder}` : "none",
                                     display: "flex",
                                     alignItems: "center",
                                     justifyContent: "center",
                                     flexShrink: 0,
+                                    color: isOpen ? COLORS.textDim : "#fff",
                                   }}
                                 >
-                                  <Package size={20} color={COLORS.textDim} />
+                                  {isOpen ? <ChevronRight size={16} style={{ transform: "rotate(90deg)" }} /> : <Plus size={16} />}
+                                </div>
+                              </button>
+
+                              {isOpen && (
+                                <div style={{ padding: "0 10px 10px" }}>
+                                  <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                                    {g.sets.map((r) => {
+                                      const found = r.remaining === 0;
+                                      return (
+                                        <div
+                                          key={`${r.setNum}-${r.index}`}
+                                          style={{
+                                            display: "flex",
+                                            alignItems: "center",
+                                            justifyContent: "space-between",
+                                            background: COLORS.bg,
+                                            borderRadius: 8,
+                                            padding: "6px 8px",
+                                          }}
+                                        >
+                                          <span style={{ fontSize: 13, fontWeight: 600 }}>{r.setNum}</span>
+                                          <span style={{ fontSize: 12, color: found ? COLORS.good : COLORS.textDim }}>
+                                            {r.collected}/{r.entry.qty}
+                                          </span>
+                                          <div style={{ display: "flex", gap: 5 }}>
+                                            {r.collected > 0 && (
+                                              <button
+                                                onClick={() => decrementCollected(r.setNum, r.index)}
+                                                aria-label="Zuordnung zurücknehmen"
+                                                style={{
+                                                  background: COLORS.panel,
+                                                  border: `1px solid ${COLORS.panelBorder}`,
+                                                  borderRadius: 6,
+                                                  width: 28,
+                                                  height: 28,
+                                                  display: "flex",
+                                                  alignItems: "center",
+                                                  justifyContent: "center",
+                                                  color: COLORS.textDim,
+                                                }}
+                                              >
+                                                <Minus size={14} />
+                                              </button>
+                                            )}
+                                            {!found && (
+                                              <button
+                                                onClick={() => incrementCollected(r.setNum, r.index)}
+                                                aria-label="Teil abhaken"
+                                                style={{
+                                                  background: COLORS.panel,
+                                                  border: `1px solid ${COLORS.good}`,
+                                                  borderRadius: 6,
+                                                  width: 28,
+                                                  height: 28,
+                                                  display: "flex",
+                                                  alignItems: "center",
+                                                  justifyContent: "center",
+                                                  color: COLORS.good,
+                                                }}
+                                              >
+                                                <Plus size={14} />
+                                              </button>
+                                            )}
+                                          </div>
+                                        </div>
+                                      );
+                                    })}
+                                  </div>
                                 </div>
                               )}
-                              <div style={{ flex: 1, minWidth: 0 }}>
-                                <div style={{ fontSize: 14, fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                                  {g.name}
-                                </div>
-                                <div style={{ fontSize: 12, color: COLORS.textDim, marginTop: 2 }}>
-                                  {g.colorName} · in {g.sets.length} {g.sets.length === 1 ? "Set" : "Sets"}
-                                </div>
-                              </div>
                             </div>
-
-                            <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-                              {g.sets.map((r) => {
-                                const found = r.remaining === 0;
-                                return (
-                                  <div
-                                    key={`${r.setNum}-${r.index}`}
-                                    style={{
-                                      display: "flex",
-                                      alignItems: "center",
-                                      justifyContent: "space-between",
-                                      background: COLORS.bg,
-                                      borderRadius: 8,
-                                      padding: "6px 8px",
-                                    }}
-                                  >
-                                    <span style={{ fontSize: 13, fontWeight: 600 }}>{r.setNum}</span>
-                                    <span style={{ fontSize: 12, color: found ? COLORS.good : COLORS.textDim }}>
-                                      {r.collected}/{r.entry.qty}
-                                    </span>
-                                    <div style={{ display: "flex", gap: 5 }}>
-                                      {r.collected > 0 && (
-                                        <button
-                                          onClick={() => decrementCollected(r.setNum, r.index)}
-                                          aria-label="Zuordnung zurücknehmen"
-                                          style={{
-                                            background: COLORS.panel,
-                                            border: `1px solid ${COLORS.panelBorder}`,
-                                            borderRadius: 6,
-                                            width: 28,
-                                            height: 28,
-                                            display: "flex",
-                                            alignItems: "center",
-                                            justifyContent: "center",
-                                            color: COLORS.textDim,
-                                          }}
-                                        >
-                                          <Minus size={14} />
-                                        </button>
-                                      )}
-                                      {!found && (
-                                        <button
-                                          onClick={() => incrementCollected(r.setNum, r.index)}
-                                          aria-label="Teil abhaken"
-                                          style={{
-                                            background: COLORS.panel,
-                                            border: `1px solid ${COLORS.good}`,
-                                            borderRadius: 6,
-                                            width: 28,
-                                            height: 28,
-                                            display: "flex",
-                                            alignItems: "center",
-                                            justifyContent: "center",
-                                            color: COLORS.good,
-                                          }}
-                                        >
-                                          <Plus size={14} />
-                                        </button>
-                                      )}
-                                    </div>
-                                  </div>
-                                );
-                              })}
-                            </div>
-                          </div>
-                        ))}
+                          );
+                        })}
                       </div>
                       {groups.length > searchShowCount && (
                         <button
