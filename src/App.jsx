@@ -992,20 +992,50 @@ export default function LegoScanner() {
     return [Math.min(a, b), Math.max(a, b)].join("x");
   }
 
-  // Grobe Kategorisierung für die manuelle Such-/Filterseite - basiert nur auf dem
-  // Teilenamen (englisch, von Rebrickable), daher eine Heuristik, keine exakte Klassifikation.
+  // Kategorisierung nach Bauteil-TYP für die manuelle Such-/Filterseite - basiert auf
+  // Schlüsselwörtern im (englischen) Teilenamen von Rebrickable, daher eine Heuristik.
   function classifyPartCategory(entry) {
     const name = (entry.name || "").toLowerCase();
-    if (name.includes("minifig") || name.includes("figure") || name.includes("head") || name.includes("torso")) return "Figur";
-    if (name.includes("sticker") || name.includes("decorated") || name.includes("printed")) return "Sonderteil";
-    const dims = extractDimsLocal(entry.name);
-    if (dims) {
-      const [a, b] = dims.split("x").map(Number);
-      const maxDim = Math.max(a, b);
-      if (maxDim >= 6) return "Groß";
-      if (maxDim <= 1) return "Klein";
-    }
-    return "Standard";
+    if (name.includes("minifig") || name.includes("figure") || name.includes("torso") || name.includes(" head")) return "Figur";
+    if (name.includes("technic")) return "Technic";
+    if (name.includes("wheel") || name.includes("tyre") || name.includes("tire")) return "Wheel";
+    if (
+      name.includes("weapon") ||
+      name.includes("sword") ||
+      name.includes("gun") ||
+      name.includes("blaster") ||
+      name.includes("axe") ||
+      name.includes("shield") ||
+      name.includes("bow") ||
+      name.includes("spear") ||
+      name.includes("lightsaber")
+    )
+      return "Weapon";
+    if (name.startsWith("plate") || name.includes(" plate")) return "Plate";
+    if (name.startsWith("tile") || name.includes(" tile")) return "Tile";
+    if (name.startsWith("brick") || name.includes(" brick")) return "Brick";
+    return "Sonstiges";
+  }
+
+  // Vereinfacht die vielen feinen Rebrickable-Farbnamen (z.B. "Light Bluish Gray",
+  // "Dark Bluish Gray") auf wenige Hauptfarben fürs Filtern - "Dark Green" und "Green"
+  // landen z.B. beide unter "Grün".
+  function simplifyColor(colorName) {
+    const c = (colorName || "").toLowerCase();
+    if (c.includes("gray") || c.includes("grey")) return "Grau";
+    if (c.includes("black")) return "Schwarz";
+    if (c.includes("white")) return "Weiß";
+    if (c.includes("brown") || c.includes("tan") || c.includes("beige")) return "Braun";
+    if (c.includes("red")) return "Rot";
+    if (c.includes("blue")) return "Blau";
+    if (c.includes("green")) return "Grün";
+    if (c.includes("yellow")) return "Gelb";
+    if (c.includes("orange")) return "Orange";
+    if (c.includes("purple") || c.includes("violet") || c.includes("lavender") || c.includes("magenta") || c.includes("pink")) return "Lila/Pink";
+    if (c.includes("gold")) return "Gold";
+    if (c.includes("silver") || c.includes("chrome")) return "Silber";
+    if (c.includes("trans")) return "Transparent";
+    return "Sonstige";
   }
 
   function scoreLocalMatch(part, entry) {
@@ -2111,7 +2141,9 @@ export default function LegoScanner() {
           {(() => {
             const setsWithLists = mySets.filter((s) => (partsLists[s] || []).length > 0);
             const allColors = Array.from(
-              new Set(setsWithLists.flatMap((s) => (partsLists[s] || []).map((p) => p.colorName).filter(Boolean)))
+              new Set(
+                setsWithLists.flatMap((s) => (partsLists[s] || []).map((p) => simplifyColor(p.colorName)).filter(Boolean))
+              )
             ).sort();
 
             return (
@@ -2183,11 +2215,14 @@ export default function LegoScanner() {
                     }}
                   >
                     <option value="all">Alle Kategorien</option>
-                    <option value="Standard">Standardteile</option>
-                    <option value="Sonderteil">Sonderteile</option>
-                    <option value="Figur">Figuren</option>
-                    <option value="Klein">Klein (1x1)</option>
-                    <option value="Groß">Groß (6+)</option>
+                    <option value="Brick">Brick</option>
+                    <option value="Plate">Plate</option>
+                    <option value="Tile">Tile</option>
+                    <option value="Wheel">Wheel</option>
+                    <option value="Weapon">Weapon</option>
+                    <option value="Technic">Technic</option>
+                    <option value="Figur">Figur</option>
+                    <option value="Sonstiges">Sonstiges</option>
                   </select>
                   <button
                     onClick={() => {
@@ -2220,7 +2255,7 @@ export default function LegoScanner() {
                       const collected = counts[index] || 0;
                       const remaining = Math.max(0, (entry.qty || 0) - collected);
                       if (searchOnlyOpen && remaining <= 0) return;
-                      if (searchColorFilter !== "all" && entry.colorName !== searchColorFilter) return;
+                      if (searchColorFilter !== "all" && simplifyColor(entry.colorName) !== searchColorFilter) return;
                       if (searchCategoryFilter !== "all" && classifyPartCategory(entry) !== searchCategoryFilter) return;
                       if (q) {
                         const hay = `${entry.name || ""} ${entry.colorName || ""} ${entry.elementId || ""}`.toLowerCase();
@@ -2247,33 +2282,41 @@ export default function LegoScanner() {
                     );
                   }
 
-                  const visible = results.slice(0, searchShowCount);
+                  // Dasselbe Teil (gleicher Name + exakt gleiche Farbe) über mehrere Sets
+                  // hinweg zu EINER Zeile zusammenfassen - das ist der Sortier-Fall: "ich habe
+                  // einen Haufen '1x2 Platte Schwarz' und will sehen, welche Sets davon noch
+                  // wie viele brauchen, um direkt zu verteilen".
+                  const groupsMap = {};
+                  results.forEach((r) => {
+                    const key = `${r.entry.name}|||${r.entry.colorName}`;
+                    if (!groupsMap[key]) {
+                      groupsMap[key] = { name: r.entry.name, colorName: r.entry.colorName, imageUrl: r.entry.imageUrl, sets: [] };
+                    }
+                    groupsMap[key].sets.push(r);
+                  });
+                  const groups = Object.values(groupsMap);
+                  const visible = groups.slice(0, searchShowCount);
 
                   return (
                     <>
                       <div style={{ fontSize: 12, color: COLORS.textDim, marginBottom: 8 }}>
-                        {results.length} Treffer
+                        {groups.length} Teile-Arten · {results.length} Zeilen über alle Sets
                       </div>
                       <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-                        {visible.map((r) => {
-                          const thumb = r.entry.imageUrl;
-                          const found = r.remaining === 0;
-                          return (
-                            <div
-                              key={`${r.setNum}-${r.index}`}
-                              style={{
-                                display: "flex",
-                                alignItems: "center",
-                                gap: 12,
-                                background: COLORS.panel,
-                                border: `1px solid ${COLORS.panelBorder}`,
-                                borderRadius: 10,
-                                padding: 10,
-                              }}
-                            >
-                              {thumb ? (
+                        {visible.map((g) => (
+                          <div
+                            key={`${g.name}|||${g.colorName}`}
+                            style={{
+                              background: COLORS.panel,
+                              border: `1px solid ${COLORS.panelBorder}`,
+                              borderRadius: 10,
+                              padding: 10,
+                            }}
+                          >
+                            <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: g.sets.length > 0 ? 10 : 0 }}>
+                              {g.imageUrl ? (
                                 <img
-                                  src={thumb}
+                                  src={g.imageUrl}
                                   alt=""
                                   style={{ width: 56, height: 56, objectFit: "contain", borderRadius: 8, background: "#fff", flexShrink: 0 }}
                                 />
@@ -2295,60 +2338,81 @@ export default function LegoScanner() {
                               )}
                               <div style={{ flex: 1, minWidth: 0 }}>
                                 <div style={{ fontSize: 14, fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                                  {r.entry.name}
+                                  {g.name}
                                 </div>
                                 <div style={{ fontSize: 12, color: COLORS.textDim, marginTop: 2 }}>
-                                  {r.entry.colorName} · {r.setNum}
+                                  {g.colorName} · in {g.sets.length} {g.sets.length === 1 ? "Set" : "Sets"}
                                 </div>
-                                <div style={{ fontSize: 12, color: found ? COLORS.good : COLORS.textDim, marginTop: 2 }}>
-                                  {r.collected}/{r.entry.qty}
-                                </div>
-                              </div>
-                              <div style={{ display: "flex", gap: 6, flexShrink: 0 }}>
-                                {r.collected > 0 && (
-                                  <button
-                                    onClick={() => decrementCollected(r.setNum, r.index)}
-                                    aria-label="Zuordnung zurücknehmen"
-                                    style={{
-                                      background: COLORS.bg,
-                                      border: `1px solid ${COLORS.panelBorder}`,
-                                      borderRadius: 8,
-                                      width: 34,
-                                      height: 34,
-                                      display: "flex",
-                                      alignItems: "center",
-                                      justifyContent: "center",
-                                      color: COLORS.textDim,
-                                    }}
-                                  >
-                                    <Minus size={16} />
-                                  </button>
-                                )}
-                                {!found && (
-                                  <button
-                                    onClick={() => incrementCollected(r.setNum, r.index)}
-                                    aria-label="Teil abhaken"
-                                    style={{
-                                      background: COLORS.bg,
-                                      border: `1px solid ${COLORS.good}`,
-                                      borderRadius: 8,
-                                      width: 34,
-                                      height: 34,
-                                      display: "flex",
-                                      alignItems: "center",
-                                      justifyContent: "center",
-                                      color: COLORS.good,
-                                    }}
-                                  >
-                                    <Plus size={16} />
-                                  </button>
-                                )}
                               </div>
                             </div>
-                          );
-                        })}
+
+                            <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                              {g.sets.map((r) => {
+                                const found = r.remaining === 0;
+                                return (
+                                  <div
+                                    key={`${r.setNum}-${r.index}`}
+                                    style={{
+                                      display: "flex",
+                                      alignItems: "center",
+                                      justifyContent: "space-between",
+                                      background: COLORS.bg,
+                                      borderRadius: 8,
+                                      padding: "6px 8px",
+                                    }}
+                                  >
+                                    <span style={{ fontSize: 13, fontWeight: 600 }}>{r.setNum}</span>
+                                    <span style={{ fontSize: 12, color: found ? COLORS.good : COLORS.textDim }}>
+                                      {r.collected}/{r.entry.qty}
+                                    </span>
+                                    <div style={{ display: "flex", gap: 5 }}>
+                                      {r.collected > 0 && (
+                                        <button
+                                          onClick={() => decrementCollected(r.setNum, r.index)}
+                                          aria-label="Zuordnung zurücknehmen"
+                                          style={{
+                                            background: COLORS.panel,
+                                            border: `1px solid ${COLORS.panelBorder}`,
+                                            borderRadius: 6,
+                                            width: 28,
+                                            height: 28,
+                                            display: "flex",
+                                            alignItems: "center",
+                                            justifyContent: "center",
+                                            color: COLORS.textDim,
+                                          }}
+                                        >
+                                          <Minus size={14} />
+                                        </button>
+                                      )}
+                                      {!found && (
+                                        <button
+                                          onClick={() => incrementCollected(r.setNum, r.index)}
+                                          aria-label="Teil abhaken"
+                                          style={{
+                                            background: COLORS.panel,
+                                            border: `1px solid ${COLORS.good}`,
+                                            borderRadius: 6,
+                                            width: 28,
+                                            height: 28,
+                                            display: "flex",
+                                            alignItems: "center",
+                                            justifyContent: "center",
+                                            color: COLORS.good,
+                                          }}
+                                        >
+                                          <Plus size={14} />
+                                        </button>
+                                      )}
+                                    </div>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          </div>
+                        ))}
                       </div>
-                      {results.length > searchShowCount && (
+                      {groups.length > searchShowCount && (
                         <button
                           onClick={() => setSearchShowCount((c) => c + 60)}
                           style={{
@@ -2362,7 +2426,7 @@ export default function LegoScanner() {
                             fontSize: 13,
                           }}
                         >
-                          Weitere {Math.min(60, results.length - searchShowCount)} laden
+                          Weitere {Math.min(60, groups.length - searchShowCount)} laden
                         </button>
                       )}
                     </>
