@@ -258,6 +258,18 @@ export default function LegoScanner() {
     showToast("Zuordnung zurückgenommen", "good");
   }
 
+  // Ein bereits bekanntes Teil direkt in der Übersicht abhaken, ohne den Scan-Weg zu nutzen.
+  function incrementCollected(setNum, idx) {
+    const entry = (partsLists[setNum] || [])[idx];
+    const setCounts = { ...(collectedCounts[setNum] || {}) };
+    const current = setCounts[idx] || 0;
+    const max = entry?.qty ?? Infinity;
+    if (current >= max) return;
+    setCounts[idx] = current + 1;
+    persistCollectedCounts({ ...collectedCounts, [setNum]: setCounts });
+    showToast("Teil abgehakt", "good");
+  }
+
   async function persistPartsListPages(next) {
     setPartsListPages(next);
     try {
@@ -1989,6 +2001,26 @@ export default function LegoScanner() {
                                     }}
                                   >
                                     <Minus size={12} />
+                                  </button>
+                                )}
+                                {!found && (
+                                  <button
+                                    onClick={() => incrementCollected(setNum, r.idx)}
+                                    aria-label="Teil abhaken"
+                                    style={{
+                                      background: COLORS.bg,
+                                      border: `1px solid ${COLORS.good}`,
+                                      borderRadius: 6,
+                                      width: 22,
+                                      height: 22,
+                                      display: "flex",
+                                      alignItems: "center",
+                                      justifyContent: "center",
+                                      color: COLORS.good,
+                                      flexShrink: 0,
+                                    }}
+                                  >
+                                    <Plus size={12} />
                                   </button>
                                 )}
                               </span>
