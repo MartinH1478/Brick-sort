@@ -15,6 +15,7 @@ import {
   Download,
   Upload,
   Minus,
+  Search,
 } from "lucide-react";
 
 // ---------- Farbtokens ----------
@@ -79,7 +80,7 @@ function makePhotoItem(id, base64) {
 }
 
 export default function LegoScanner() {
-  const [screen, setScreen] = useState("setup"); // setup | scan | overview
+  const [screen, setScreen] = useState("setup"); // setup | scan | overview | search
   const [mySets, setMySets] = useState([]);
   const [newSetInput, setNewSetInput] = useState("");
   const [partsLists, setPartsLists] = useState({}); // { [setNum]: [{elementId, name, colorName, qty}] }
@@ -92,6 +93,12 @@ export default function LegoScanner() {
   const [setMeta, setSetMeta] = useState({}); // { [setNum]: { name, imgUrl } }
   const [expandedSetNum, setExpandedSetNum] = useState(null);
   const [expandedOverviewSet, setExpandedOverviewSet] = useState(null);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [searchSetFilter, setSearchSetFilter] = useState("all");
+  const [searchColorFilter, setSearchColorFilter] = useState("all");
+  const [searchCategoryFilter, setSearchCategoryFilter] = useState("all");
+  const [searchOnlyOpen, setSearchOnlyOpen] = useState(true);
+  const [searchShowCount, setSearchShowCount] = useState(60);
   const [pdfjsReady, setPdfjsReady] = useState(false);
   const [pdfjsFailed, setPdfjsFailed] = useState(false);
   const [pdfUploadingFor, setPdfUploadingFor] = useState(null); // setNum, während PDF verarbeitet wird
@@ -985,6 +992,22 @@ export default function LegoScanner() {
     return [Math.min(a, b), Math.max(a, b)].join("x");
   }
 
+  // Grobe Kategorisierung für die manuelle Such-/Filterseite - basiert nur auf dem
+  // Teilenamen (englisch, von Rebrickable), daher eine Heuristik, keine exakte Klassifikation.
+  function classifyPartCategory(entry) {
+    const name = (entry.name || "").toLowerCase();
+    if (name.includes("minifig") || name.includes("figure") || name.includes("head") || name.includes("torso")) return "Figur";
+    if (name.includes("sticker") || name.includes("decorated") || name.includes("printed")) return "Sonderteil";
+    const dims = extractDimsLocal(entry.name);
+    if (dims) {
+      const [a, b] = dims.split("x").map(Number);
+      const maxDim = Math.max(a, b);
+      if (maxDim >= 6) return "Groß";
+      if (maxDim <= 1) return "Klein";
+    }
+    return "Standard";
+  }
+
   function scoreLocalMatch(part, entry) {
     const dimGuess = extractDimsLocal(part.shapeName);
     const dimEntry = extractDimsLocal(entry.name);
@@ -1019,9 +1042,12 @@ export default function LegoScanner() {
   // Kompakte KI-Nachfrage NUR mit einer kleinen, bereits lokal vorgefilterten Kandidatenliste
   // (nicht die komplette Teileliste) - deutlich günstiger als der komplette Katalog, aber
   // trotzdem KI-Unterstützung für unklare Fälle (Synonyme, ungenaue Fotoerkennung).
-  async function aiFallbackMatch(part, setNum, candidatePool) {
-    const compact = candidatePool
-      .map((c) => `${c.index}:{id:"${c.entry.elementId || ""}",name:"${c.entry.name || ""}",color:"${c.entry.colorName || ""}"}`)
+  // Eine EINZIGE KI-Nachfrage über alle Sets gleichzeitig, mit einer bereits nach Farbe
+  // gefilterten (und daher kurzen) Gesamtliste. Vermeidet, dass die KI blind in einem
+  // einzelnen (evtl. falschen) Set raten muss und Nutzer manuell durch Sets klicken müssen.
+  async function aiFallbackMatch(part, pool) {
+    const compact = pool
+      .map((c, i) => `${i}:{set:"${c.setNum}",id:"${c.entry.elementId || ""}",name:"${c.entry.name || ""}",color:"${c.entry.colorName || ""}"}`)
       .join(", ");
     try {
       const response = await fetch("/api/claude", {
@@ -1040,10 +1066,12 @@ export default function LegoScanner() {
                     `Ein LEGO-Teil wurde fotografiert, vorläufig eingeschätzt als Form "${part.shapeName}", ` +
                     `Farbe "${part.colorName}"${part.elementIdGuess ? `, evtl. Element-ID "${part.elementIdGuess}"` : ""}. ` +
                     "WICHTIG: Die geschätzten Maße/Form aus dem Foto sind unzuverlässig (Perspektive, " +
-                    "Entfernung) - verlass dich NICHT blind darauf. Die folgende Kandidatenliste wurde " +
-                    "bereits grob nach Farbe vorgefiltert (Farbe daher meist schon passend), du sollst " +
-                    "primär beurteilen, welcher Eintrag von der FORM her am ehesten passt. " +
-                    `Kandidatenliste aus Set ${setNum} (Index:{id,name,color}): ${compact}. ` +
+                    "Entfernung) - verlass dich NICHT blind darauf. Die folgende Liste enthält Kandidaten " +
+                    "aus MEHREREN LEGO-Sets, bereits grob nach Farbe vorgefiltert (Farbe daher meist " +
+                    "schon passend), sortiert nach Priorität (frühere Sets zuerst). Beurteile primär, " +
+                    "welcher Eintrag von der FORM her am ehesten passt - bei mehreren ähnlich plausiblen " +
+                    "Kandidaten aus verschiedenen Sets bevorzuge den aus dem Set, das WEITER OBEN in der " +
+                    `Liste steht. Kandidatenliste (Index:{set,id,name,color}): ${compact}. ` +
                     "Welcher Index passt am ehesten (auch bei abweichender Formulierung/Synonymen wie " +
                     "'Winkelplatte'='Eckplatte')? Sei zurückhaltend - im Zweifel lieber null zurückgeben " +
                     "als falsch raten. Antworte NUR mit JSON ohne Codeblock: " +
@@ -1064,7 +1092,7 @@ export default function LegoScanner() {
       } catch (e) {
         parsed = { index: null };
       }
-      setLastDebugResponse(`[Abgleich-Nachfrage ${setNum}] ${raw}`);
+      setLastDebugResponse(`[Abgleich, ${pool.length} Kandidaten] ${raw}`);
       if (parsed && parsed.index !== null && parsed.index !== undefined) {
         return { index: parsed.index, confidence: parsed.confidence || "medium" };
       }
@@ -1074,7 +1102,7 @@ export default function LegoScanner() {
     }
   }
 
-  async function matchAgainstSetsAI(id, part, skipSets = []) {
+  async function matchAgainstSetsAI(id, part, excludeCandidates = []) {
     if (mySets.length === 0) {
       updatePhoto(id, { matchStatus: "no-sets", candidateSets: [] });
       return;
@@ -1085,89 +1113,96 @@ export default function LegoScanner() {
       return;
     }
 
-    const MAX_AI_FALLBACK_SETS = 3; // Kosten-Deckel: höchstens 3 Sets per KI-Nachfrage prüfen
-    let setsCheckedWithAI = 0;
-
-    // Sets in der vom Nutzer eingetragenen Reihenfolge prüfen - erstes Set hat Priorität,
-    // erst bei keinem Treffer wird das nächste Set angeschaut (ein Set nach dem anderen
-    // vervollständigen statt Teile wahllos verteilen).
+    // 1) Eine exakte Element-ID (vom Teil abgelesen) gilt als sicher genug, um ohne
+    // KI-Nachfrage zu übernehmen - über alle Sets geprüft, kostenlos.
     for (const setNum of setsWithLists) {
-      if (skipSets.includes(setNum)) continue;
       const list = partsLists[setNum] || [];
-      const counts = collectedCounts[setNum] || {};
-      const scored = list.map((entry, index) => ({ index, entry, ...scoreLocalMatch(part, entry) }));
-
-      // NUR eine exakte Element-ID (vom Teil abgelesen) gilt als sicher genug, um ohne
-      // KI-Nachfrage zu übernehmen - geschätzte Maße/Farbe allein waren zu oft falsch, das
-      // hat schon mehrfach zu falschen "sicheren" Treffern geführt.
-      const idHit = scored.find((r) => r.idMatch);
-      if (idHit) {
+      const idGuess = (part.elementIdGuess || "").toString().trim().toLowerCase();
+      if (!idGuess) break;
+      const idx = list.findIndex((entry) => {
+        const entryId = (entry.elementId || "").toString().trim().toLowerCase();
+        return entryId && (entryId === idGuess || entryId.includes(idGuess) || idGuess.includes(entryId));
+      });
+      if (idx !== -1) {
         updatePhoto(id, {
           matchStatus: "found",
           candidateSets: [
             {
               setNum,
-              index: idHit.index,
-              matchedName: `${idHit.entry.name} · ${idHit.entry.colorName}`,
+              index: idx,
+              matchedName: `${list[idx].name} · ${list[idx].colorName}`,
               confidence: "high",
             },
           ],
         });
         return;
       }
+    }
 
-      // Kandidatenliste primär nach FARBE filtern - die schätzt die KI beim Foto zuverlässiger
-      // ein als Maße. Nur wenn die Farbe gar keine Treffer im Set ergibt, auf alle offenen
-      // Teile zurückfallen.
-      if (setsCheckedWithAI < MAX_AI_FALLBACK_SETS) {
-        const openEntries = scored.filter((r) => (r.entry.qty || 0) - (counts[r.index] || 0) > 0);
-        const colorKeyword = COLOR_DE_EN[(part.colorName || "").toLowerCase().trim()] || null;
-        let candidatePool = openEntries;
-        if (colorKeyword) {
-          const colorFiltered = openEntries.filter((r) => (r.entry.colorName || "").toLowerCase().includes(colorKeyword));
-          if (colorFiltered.length > 0) candidatePool = colorFiltered;
-        }
-        candidatePool = candidatePool.sort((a, b) => b.score - a.score).slice(0, 80);
+    // 2) Kombinierter, nach Farbe gefilterter Kandidatenpool über ALLE Sets gleichzeitig -
+    // in Prioritätsreihenfolge (erstes eingetragenes Set zuerst), damit die KI bei Unklarheit
+    // das wichtigere Set bevorzugt, aber trotzdem in einem Rutsch alle Sets sieht.
+    const colorKeyword = COLOR_DE_EN[(part.colorName || "").toLowerCase().trim()] || null;
 
-        if (candidatePool.length > 0) {
-          setsCheckedWithAI++;
-          const result = await aiFallbackMatch(part, setNum, candidatePool);
-          if (result) {
-            const match = candidatePool.find((c) => c.index === result.index);
-            if (match) {
-              updatePhoto(id, {
-                matchStatus: "found",
-                candidateSets: [
-                  {
-                    setNum,
-                    index: match.index,
-                    matchedName: `${match.entry.name} · ${match.entry.colorName}`,
-                    confidence: result.confidence,
-                  },
-                ],
-              });
-              return;
-            }
-          }
-        }
+    function buildPool(requireColor) {
+      const pool = [];
+      for (const setNum of setsWithLists) {
+        const list = partsLists[setNum] || [];
+        const counts = collectedCounts[setNum] || {};
+        list.forEach((entry, index) => {
+          const remaining = (entry.qty || 0) - (counts[index] || 0);
+          if (remaining <= 0) return;
+          if (excludeCandidates.some((c) => c.setNum === setNum && c.index === index)) return;
+          if (requireColor && colorKeyword && !(entry.colorName || "").toLowerCase().includes(colorKeyword)) return;
+          pool.push({ setNum, index, entry });
+        });
+      }
+      return pool;
+    }
+
+    let pool = colorKeyword ? buildPool(true) : [];
+    if (pool.length === 0) pool = buildPool(false); // Farbe ergab nichts -> auf alle offenen Teile zurückfallen
+    pool = pool.slice(0, 120); // Kosten-Deckel
+
+    if (pool.length === 0) {
+      updatePhoto(id, { matchStatus: "none", candidateSets: [] });
+      if (excludeCandidates.length > 0) {
+        showToast("Kein weiterer Kandidat gefunden — bitte manuell wählen", "warn");
+      }
+      return;
+    }
+
+    const result = await aiFallbackMatch(part, pool);
+    if (result) {
+      const match = pool[result.index];
+      if (match) {
+        updatePhoto(id, {
+          matchStatus: "found",
+          candidateSets: [
+            {
+              setNum: match.setNum,
+              index: match.index,
+              matchedName: `${match.entry.name} · ${match.entry.colorName}`,
+              confidence: result.confidence,
+            },
+          ],
+        });
+        return;
       }
     }
 
     updatePhoto(id, { matchStatus: "none", candidateSets: [] });
-    if (skipSets.length > 0) {
-      showToast("Keine weiteren Sets mit passendem Teil gefunden — bitte manuell wählen", "warn");
-    }
   }
 
-  // Sucht gezielt in den NÄCHSTEN Sets weiter, überspringt dabei das Set, dessen Vorschlag
-  // gerade abgelehnt wurde (z.B. weil er nicht zum Foto passt).
+  // Sucht nochmal, schließt dabei den gerade abgelehnten (falschen) Kandidaten aus - meist
+  // reicht ein, maximal zwei Versuche, statt manuell durch einzelne Sets zu klicken.
   async function searchNextSet(id) {
     const photo = photos.find((p) => p.id === id);
     if (!photo) return;
-    const rejectedSetNum = photo.candidateSets?.[0]?.setNum;
-    const triedSets = [...(photo.triedSets || []), rejectedSetNum].filter(Boolean);
-    updatePhoto(id, { matchStatus: "checking", triedSets });
-    await matchAgainstSetsAI(id, photo.result, triedSets);
+    const rejected = photo.candidateSets?.[0];
+    const excludeCandidates = [...(photo.excludeCandidates || []), rejected].filter(Boolean);
+    updatePhoto(id, { matchStatus: "checking", excludeCandidates });
+    await matchAgainstSetsAI(id, photo.result, excludeCandidates);
   }
 
   // Nochmal mit einem stärkeren (teureren) Modell prüfen - nur für Problemfälle gedacht,
@@ -1326,6 +1361,13 @@ export default function LegoScanner() {
           </span>
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+          <button
+            onClick={() => setScreen(screen === "search" ? "setup" : "search")}
+            style={{ background: "transparent", border: "none", color: COLORS.textDim, padding: 6, display: "flex" }}
+            aria-label="Manuelle Suche"
+          >
+            <Search size={20} />
+          </button>
           <button
             onClick={() => setScreen(screen === "overview" ? "setup" : "overview")}
             style={{ background: "transparent", border: "none", color: COLORS.textDim, padding: 6, display: "flex" }}
@@ -1491,6 +1533,29 @@ export default function LegoScanner() {
               <Plus size={20} color="#fff" />
             </button>
           </div>
+
+          <button
+            onClick={() => setScreen("scan")}
+            disabled={mySets.length === 0}
+            style={{
+              width: "100%",
+              background: mySets.length === 0 ? COLORS.panel : COLORS.accent,
+              opacity: mySets.length === 0 ? 0.5 : 1,
+              border: "none",
+              borderRadius: 12,
+              padding: "16px",
+              color: "#fff",
+              fontWeight: 700,
+              fontSize: 15,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              gap: 8,
+              marginBottom: 20,
+            }}
+          >
+            <Camera size={18} /> Fotos aufnehmen <ChevronRight size={16} />
+          </button>
 
           {mySets.length === 0 ? (
             <div
@@ -1718,28 +1783,6 @@ export default function LegoScanner() {
             style={{ display: "none" }}
             onChange={handleTeilelisteImagesSelected}
           />
-
-          <button
-            onClick={() => setScreen("scan")}
-            disabled={mySets.length === 0}
-            style={{
-              width: "100%",
-              background: mySets.length === 0 ? COLORS.panel : COLORS.accent,
-              opacity: mySets.length === 0 ? 0.5 : 1,
-              border: "none",
-              borderRadius: 12,
-              padding: "16px",
-              color: "#fff",
-              fontWeight: 700,
-              fontSize: 15,
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              gap: 8,
-            }}
-          >
-            <Camera size={18} /> Fotos aufnehmen <ChevronRight size={16} />
-          </button>
 
           {log.length > 0 && (
             <div style={{ marginTop: 28 }}>
@@ -2034,6 +2077,300 @@ export default function LegoScanner() {
                 );
               })
           )}
+        </main>
+      )}
+
+      {screen === "search" && (
+        <main style={{ flex: 1, padding: 20, maxWidth: 480, margin: "0 auto", width: "100%" }}>
+          <h1 style={{ fontSize: 22, fontWeight: 800, marginBottom: 4, letterSpacing: "-0.02em" }}>
+            Manuelle Suche
+          </h1>
+          <p style={{ color: COLORS.textDim, fontSize: 14, marginBottom: 16, lineHeight: 1.5 }}>
+            Zum Abhaken bereits sortierter Teile — such/filtere und tippe direkt auf "+".
+          </p>
+
+          <input
+            value={searchQuery}
+            onChange={(e) => {
+              setSearchQuery(e.target.value);
+              setSearchShowCount(60);
+            }}
+            placeholder="Suche nach Name, Farbe, ID..."
+            style={{
+              width: "100%",
+              background: COLORS.panel,
+              border: `1px solid ${COLORS.panelBorder}`,
+              borderRadius: 10,
+              padding: "12px 14px",
+              color: COLORS.text,
+              fontSize: 15,
+              marginBottom: 10,
+            }}
+          />
+
+          {(() => {
+            const setsWithLists = mySets.filter((s) => (partsLists[s] || []).length > 0);
+            const allColors = Array.from(
+              new Set(setsWithLists.flatMap((s) => (partsLists[s] || []).map((p) => p.colorName).filter(Boolean)))
+            ).sort();
+
+            return (
+              <>
+                <div style={{ display: "flex", gap: 8, marginBottom: 8 }}>
+                  <select
+                    value={searchSetFilter}
+                    onChange={(e) => {
+                      setSearchSetFilter(e.target.value);
+                      setSearchShowCount(60);
+                    }}
+                    style={{
+                      flex: 1,
+                      background: COLORS.panel,
+                      border: `1px solid ${COLORS.panelBorder}`,
+                      borderRadius: 8,
+                      padding: "8px 6px",
+                      color: COLORS.text,
+                      fontSize: 12,
+                    }}
+                  >
+                    <option value="all">Alle Sets</option>
+                    {setsWithLists.map((s) => (
+                      <option key={s} value={s}>
+                        {s}
+                      </option>
+                    ))}
+                  </select>
+                  <select
+                    value={searchColorFilter}
+                    onChange={(e) => {
+                      setSearchColorFilter(e.target.value);
+                      setSearchShowCount(60);
+                    }}
+                    style={{
+                      flex: 1,
+                      background: COLORS.panel,
+                      border: `1px solid ${COLORS.panelBorder}`,
+                      borderRadius: 8,
+                      padding: "8px 6px",
+                      color: COLORS.text,
+                      fontSize: 12,
+                    }}
+                  >
+                    <option value="all">Alle Farben</option>
+                    {allColors.map((c) => (
+                      <option key={c} value={c}>
+                        {c}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div style={{ display: "flex", gap: 8, marginBottom: 14 }}>
+                  <select
+                    value={searchCategoryFilter}
+                    onChange={(e) => {
+                      setSearchCategoryFilter(e.target.value);
+                      setSearchShowCount(60);
+                    }}
+                    style={{
+                      flex: 1,
+                      background: COLORS.panel,
+                      border: `1px solid ${COLORS.panelBorder}`,
+                      borderRadius: 8,
+                      padding: "8px 6px",
+                      color: COLORS.text,
+                      fontSize: 12,
+                    }}
+                  >
+                    <option value="all">Alle Kategorien</option>
+                    <option value="Standard">Standardteile</option>
+                    <option value="Sonderteil">Sonderteile</option>
+                    <option value="Figur">Figuren</option>
+                    <option value="Klein">Klein (1x1)</option>
+                    <option value="Groß">Groß (6+)</option>
+                  </select>
+                  <button
+                    onClick={() => {
+                      setSearchOnlyOpen((v) => !v);
+                      setSearchShowCount(60);
+                    }}
+                    style={{
+                      flex: 1,
+                      background: searchOnlyOpen ? COLORS.accent : COLORS.panel,
+                      border: `1px solid ${searchOnlyOpen ? COLORS.accent : COLORS.panelBorder}`,
+                      borderRadius: 8,
+                      padding: "8px 6px",
+                      color: searchOnlyOpen ? "#fff" : COLORS.textDim,
+                      fontSize: 12,
+                      fontWeight: 600,
+                    }}
+                  >
+                    {searchOnlyOpen ? "Nur offene" : "Alle Teile"}
+                  </button>
+                </div>
+
+                {(() => {
+                  const q = searchQuery.trim().toLowerCase();
+                  let results = [];
+                  const setsToSearch = searchSetFilter === "all" ? setsWithLists : [searchSetFilter];
+                  setsToSearch.forEach((setNum) => {
+                    const list = partsLists[setNum] || [];
+                    const counts = collectedCounts[setNum] || {};
+                    list.forEach((entry, index) => {
+                      const collected = counts[index] || 0;
+                      const remaining = Math.max(0, (entry.qty || 0) - collected);
+                      if (searchOnlyOpen && remaining <= 0) return;
+                      if (searchColorFilter !== "all" && entry.colorName !== searchColorFilter) return;
+                      if (searchCategoryFilter !== "all" && classifyPartCategory(entry) !== searchCategoryFilter) return;
+                      if (q) {
+                        const hay = `${entry.name || ""} ${entry.colorName || ""} ${entry.elementId || ""}`.toLowerCase();
+                        if (!hay.includes(q)) return;
+                      }
+                      results.push({ setNum, index, entry, collected, remaining });
+                    });
+                  });
+
+                  if (results.length === 0) {
+                    return (
+                      <div
+                        style={{
+                          border: `1px dashed ${COLORS.panelBorder}`,
+                          borderRadius: 12,
+                          padding: "28px 16px",
+                          textAlign: "center",
+                          color: COLORS.textDim,
+                          fontSize: 14,
+                        }}
+                      >
+                        Keine Teile gefunden.
+                      </div>
+                    );
+                  }
+
+                  const visible = results.slice(0, searchShowCount);
+
+                  return (
+                    <>
+                      <div style={{ fontSize: 12, color: COLORS.textDim, marginBottom: 8 }}>
+                        {results.length} Treffer
+                      </div>
+                      <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                        {visible.map((r) => {
+                          const thumb = r.entry.imageUrl;
+                          const found = r.remaining === 0;
+                          return (
+                            <div
+                              key={`${r.setNum}-${r.index}`}
+                              style={{
+                                display: "flex",
+                                alignItems: "center",
+                                gap: 12,
+                                background: COLORS.panel,
+                                border: `1px solid ${COLORS.panelBorder}`,
+                                borderRadius: 10,
+                                padding: 10,
+                              }}
+                            >
+                              {thumb ? (
+                                <img
+                                  src={thumb}
+                                  alt=""
+                                  style={{ width: 56, height: 56, objectFit: "contain", borderRadius: 8, background: "#fff", flexShrink: 0 }}
+                                />
+                              ) : (
+                                <div
+                                  style={{
+                                    width: 56,
+                                    height: 56,
+                                    borderRadius: 8,
+                                    background: COLORS.bg,
+                                    display: "flex",
+                                    alignItems: "center",
+                                    justifyContent: "center",
+                                    flexShrink: 0,
+                                  }}
+                                >
+                                  <Package size={20} color={COLORS.textDim} />
+                                </div>
+                              )}
+                              <div style={{ flex: 1, minWidth: 0 }}>
+                                <div style={{ fontSize: 14, fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                                  {r.entry.name}
+                                </div>
+                                <div style={{ fontSize: 12, color: COLORS.textDim, marginTop: 2 }}>
+                                  {r.entry.colorName} · {r.setNum}
+                                </div>
+                                <div style={{ fontSize: 12, color: found ? COLORS.good : COLORS.textDim, marginTop: 2 }}>
+                                  {r.collected}/{r.entry.qty}
+                                </div>
+                              </div>
+                              <div style={{ display: "flex", gap: 6, flexShrink: 0 }}>
+                                {r.collected > 0 && (
+                                  <button
+                                    onClick={() => decrementCollected(r.setNum, r.index)}
+                                    aria-label="Zuordnung zurücknehmen"
+                                    style={{
+                                      background: COLORS.bg,
+                                      border: `1px solid ${COLORS.panelBorder}`,
+                                      borderRadius: 8,
+                                      width: 34,
+                                      height: 34,
+                                      display: "flex",
+                                      alignItems: "center",
+                                      justifyContent: "center",
+                                      color: COLORS.textDim,
+                                    }}
+                                  >
+                                    <Minus size={16} />
+                                  </button>
+                                )}
+                                {!found && (
+                                  <button
+                                    onClick={() => incrementCollected(r.setNum, r.index)}
+                                    aria-label="Teil abhaken"
+                                    style={{
+                                      background: COLORS.bg,
+                                      border: `1px solid ${COLORS.good}`,
+                                      borderRadius: 8,
+                                      width: 34,
+                                      height: 34,
+                                      display: "flex",
+                                      alignItems: "center",
+                                      justifyContent: "center",
+                                      color: COLORS.good,
+                                    }}
+                                  >
+                                    <Plus size={16} />
+                                  </button>
+                                )}
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                      {results.length > searchShowCount && (
+                        <button
+                          onClick={() => setSearchShowCount((c) => c + 60)}
+                          style={{
+                            width: "100%",
+                            marginTop: 12,
+                            background: "transparent",
+                            border: `1px solid ${COLORS.panelBorder}`,
+                            borderRadius: 10,
+                            padding: 12,
+                            color: COLORS.textDim,
+                            fontSize: 13,
+                          }}
+                        >
+                          Weitere {Math.min(60, results.length - searchShowCount)} laden
+                        </button>
+                      )}
+                    </>
+                  );
+                })()}
+              </>
+            );
+          })()}
         </main>
       )}
 
