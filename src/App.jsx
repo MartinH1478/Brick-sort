@@ -97,6 +97,7 @@ export default function LegoScanner() {
   const [searchSetFilter, setSearchSetFilter] = useState("all");
   const [searchColorFilter, setSearchColorFilter] = useState("all");
   const [searchCategoryFilter, setSearchCategoryFilter] = useState("all");
+  const [searchSizeFilter, setSearchSizeFilter] = useState("all");
   const [searchOnlyOpen, setSearchOnlyOpen] = useState(true);
   const [searchShowCount, setSearchShowCount] = useState(60);
   const [expandedSearchGroup, setExpandedSearchGroup] = useState(null);
@@ -275,6 +276,17 @@ export default function LegoScanner() {
     if (current >= max) return;
     setCounts[idx] = current + 1;
     persistCollectedCounts({ ...collectedCounts, [setNum]: setCounts });
+    persistLog([
+      {
+        id: Date.now(),
+        shapeName: entry ? `${entry.name} · ${entry.colorName}` : "Unbekanntes Teil",
+        colorName: entry?.colorName || "",
+        setNum,
+        qty: 1,
+        time: new Date().toLocaleString("de-DE"),
+      },
+      ...log,
+    ]);
     showToast("Teil abgehakt", "good");
   }
 
@@ -2127,7 +2139,7 @@ export default function LegoScanner() {
               setSearchQuery(e.target.value);
               setSearchShowCount(60);
             }}
-            placeholder="Suche nach Name, Farbe, ID..."
+            placeholder="z.B. 1x2, grau, plate (Komma = mehrere Begriffe)"
             style={{
               width: "100%",
               background: COLORS.panel,
@@ -2147,6 +2159,15 @@ export default function LegoScanner() {
                 setsWithLists.flatMap((s) => (partsLists[s] || []).map((p) => simplifyColor(p.colorName)).filter(Boolean))
               )
             ).sort();
+            const allSizes = Array.from(
+              new Set(
+                setsWithLists.flatMap((s) => (partsLists[s] || []).map((p) => extractDimsLocal(p.name)).filter(Boolean))
+              )
+            ).sort((a, b) => {
+              const [a1, a2] = a.split("x").map(Number);
+              const [b1, b2] = b.split("x").map(Number);
+              return a1 * a2 - b1 * b2 || a1 - b1;
+            });
 
             return (
               <>
@@ -2227,6 +2248,32 @@ export default function LegoScanner() {
                     <option value="Figur">Figur</option>
                     <option value="Sonstiges">Sonstiges</option>
                   </select>
+                  <select
+                    value={searchSizeFilter}
+                    onChange={(e) => {
+                      setSearchSizeFilter(e.target.value);
+                      setSearchShowCount(60);
+                    }}
+                    style={{
+                      flex: 1,
+                      background: COLORS.panel,
+                      border: `1px solid ${COLORS.panelBorder}`,
+                      borderRadius: 8,
+                      padding: "8px 6px",
+                      color: COLORS.text,
+                      fontSize: 12,
+                    }}
+                  >
+                    <option value="all">Alle Größen</option>
+                    {allSizes.map((s) => (
+                      <option key={s} value={s}>
+                        {s}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div style={{ display: "flex", gap: 8, marginBottom: 14 }}>
                   <button
                     onClick={() => {
                       setSearchOnlyOpen((v) => !v);
@@ -2248,7 +2295,12 @@ export default function LegoScanner() {
                 </div>
 
                 {(() => {
-                  const q = searchQuery.trim().toLowerCase();
+                  // Kommagetrennte Begriffe im Suchfeld = mehrere Filter auf einmal, ALLE
+                  // müssen zutreffen (z.B. "1x2, grau, plate").
+                  const qTerms = searchQuery
+                    .split(",")
+                    .map((t) => t.trim().toLowerCase().replace(/\s*x\s*/g, "x"))
+                    .filter(Boolean);
                   let results = [];
                   const setsToSearch = searchSetFilter === "all" ? setsWithLists : [searchSetFilter];
                   setsToSearch.forEach((setNum) => {
@@ -2260,9 +2312,12 @@ export default function LegoScanner() {
                       if (searchOnlyOpen && remaining <= 0) return;
                       if (searchColorFilter !== "all" && simplifyColor(entry.colorName) !== searchColorFilter) return;
                       if (searchCategoryFilter !== "all" && classifyPartCategory(entry) !== searchCategoryFilter) return;
-                      if (q) {
-                        const hay = `${entry.name || ""} ${entry.colorName || ""} ${entry.elementId || ""}`.toLowerCase();
-                        if (!hay.includes(q)) return;
+                      if (searchSizeFilter !== "all" && extractDimsLocal(entry.name) !== searchSizeFilter) return;
+                      if (qTerms.length > 0) {
+                        const hay = `${entry.name || ""} ${entry.colorName || ""} ${entry.elementId || ""} ${setNum}`
+                          .toLowerCase()
+                          .replace(/\s*x\s*/g, "x");
+                        if (!qTerms.every((term) => hay.includes(term))) return;
                       }
                       results.push({ setNum, index, entry, collected, remaining });
                     });
@@ -2297,7 +2352,14 @@ export default function LegoScanner() {
                     }
                     groupsMap[key].sets.push(r);
                   });
-                  const groups = Object.values(groupsMap);
+                  // Feste, inhaltsbasierte Sortierung (nicht nach Einfüge-Reihenfolge beim
+                  // Filtern) - sonst springt die Liste bei jeder Änderung durcheinander und
+                  // man verliert die Position, an der man gerade sortiert.
+                  const groups = Object.values(groupsMap).sort((a, b) => {
+                    const nameCompare = a.name.localeCompare(b.name);
+                    if (nameCompare !== 0) return nameCompare;
+                    return (a.colorName || "").localeCompare(b.colorName || "");
+                  });
                   const visible = groups.slice(0, searchShowCount);
 
                   return (
