@@ -487,6 +487,7 @@ export default function LegoScanner() {
       const data = await res.json();
       if (!res.ok) throw new Error(data?.detail || data?.error || `HTTP ${res.status}`);
       setGlobalSets(data.results || []);
+      setLastDebugResponse(`[Weltweite Suche] ${JSON.stringify(data).slice(0, 800)}`);
       if ((data.results || []).length === 0) showToast("Keine Sets mit dieser Teil/Farb-Kombination gefunden", "warn");
     } catch (err) {
       showToast(`Rebrickable-Fehler: ${err?.message || err}`.slice(0, 150), "warn");
@@ -2791,11 +2792,16 @@ export default function LegoScanner() {
                     </div>
                   ) : (
                     <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-                      {globalSets.map((s) => {
-                        const isMine = mySets.includes(s.set?.set_num);
+                      {globalSets.map((s, i) => {
+                        // Rebrickable liefert je nach Endpunkt mal ein verschachteltes "set"-Objekt,
+                        // mal die Felder direkt auf oberster Ebene - beides abdecken.
+                        const setNum = s.set_num || s.set?.set_num || "";
+                        const setName = s.name || s.set?.name || "(kein Name in der Antwort)";
+                        const imgUrl = s.set_img_url || s.set?.set_img_url || null;
+                        const isMine = mySets.includes(setNum);
                         return (
                           <div
-                            key={s.set?.set_num}
+                            key={setNum || i}
                             style={{
                               display: "flex",
                               alignItems: "center",
@@ -2806,9 +2812,9 @@ export default function LegoScanner() {
                               padding: 10,
                             }}
                           >
-                            {s.set?.set_img_url ? (
+                            {imgUrl ? (
                               <img
-                                src={s.set.set_img_url}
+                                src={imgUrl}
                                 alt=""
                                 style={{ width: 44, height: 44, objectFit: "contain", borderRadius: 6, background: "#fff", flexShrink: 0 }}
                               />
@@ -2830,10 +2836,10 @@ export default function LegoScanner() {
                             )}
                             <div style={{ minWidth: 0, flex: 1 }}>
                               <div style={{ fontSize: 13, fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                                {s.set?.name}
+                                {setName}
                               </div>
                               <div style={{ fontSize: 12, color: isMine ? COLORS.good : COLORS.textDim, marginTop: 2 }}>
-                                {s.set?.set_num} {isMine ? "· eines deiner Sets!" : ""}
+                                {setNum} {isMine ? "· eines deiner Sets!" : ""}
                               </div>
                             </div>
                           </div>
