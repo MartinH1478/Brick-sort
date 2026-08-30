@@ -1107,7 +1107,10 @@ export default function LegoScanner() {
       name.includes("lightsaber")
     )
       return "Weapon";
-    if (name.includes("slope") || name.includes("wedge")) return "Sloped";
+    if (name.includes("bracket")) return "Bracket";
+    if (name.includes("hinge")) return "Hinge";
+    if (name.includes("wedge")) return "Wedge";
+    if (name.includes("slope")) return "Sloped";
     if (name.startsWith("plate") || name.includes(" plate")) return "Plate";
     if (name.startsWith("tile") || name.includes(" tile")) return "Tile";
     if (name.startsWith("brick") || name.includes(" brick")) return "Brick";
@@ -2334,6 +2337,9 @@ export default function LegoScanner() {
                     <option value="Wheel">Wheel</option>
                     <option value="Weapon">Weapon</option>
                     <option value="Sloped">Sloped</option>
+                    <option value="Wedge">Wedge</option>
+                    <option value="Bracket">Bracket</option>
+                    <option value="Hinge">Hinge</option>
                     <option value="Technic">Technic</option>
                     <option value="Figur">Figur</option>
                     <option value="Sonstiges">Sonstiges</option>
