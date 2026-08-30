@@ -16,6 +16,7 @@ import {
   Upload,
   Minus,
   Search,
+  BookOpen,
 } from "lucide-react";
 
 // ---------- Farbtokens ----------
@@ -80,7 +81,7 @@ function makePhotoItem(id, base64) {
 }
 
 export default function LegoScanner() {
-  const [screen, setScreen] = useState("setup"); // setup | scan | overview | search
+  const [screen, setScreen] = useState("setup"); // setup | scan | overview | search | globalSearch
   const [mySets, setMySets] = useState([]);
   const [newSetInput, setNewSetInput] = useState("");
   const [partsLists, setPartsLists] = useState({}); // { [setNum]: [{elementId, name, colorName, qty}] }
@@ -101,6 +102,15 @@ export default function LegoScanner() {
   const [searchOnlyOpen, setSearchOnlyOpen] = useState(true);
   const [searchShowCount, setSearchShowCount] = useState(60);
   const [expandedSearchGroup, setExpandedSearchGroup] = useState(null);
+  const [globalQuery, setGlobalQuery] = useState("");
+  const [globalLoading, setGlobalLoading] = useState(false);
+  const [globalResults, setGlobalResults] = useState([]);
+  const [selectedGlobalPart, setSelectedGlobalPart] = useState(null); // {part_num, name, part_img_url}
+  const [globalColors, setGlobalColors] = useState([]);
+  const [globalColorsLoading, setGlobalColorsLoading] = useState(false);
+  const [selectedGlobalColor, setSelectedGlobalColor] = useState(null); // {color_id, color_name}
+  const [globalSets, setGlobalSets] = useState([]);
+  const [globalSetsLoading, setGlobalSetsLoading] = useState(false);
   const [pdfjsReady, setPdfjsReady] = useState(false);
   const [pdfjsFailed, setPdfjsFailed] = useState(false);
   const [pdfUploadingFor, setPdfUploadingFor] = useState(null); // setNum, während PDF verarbeitet wird
@@ -413,7 +423,79 @@ export default function LegoScanner() {
     }
   }
 
-  // ---------- Sicherung: Export/Import des gesamten Fortschritts ----------
+  // ---------- Weltweite Rebrickable-Suche (unabhängig von den eigenen Sets) ----------
+  // Für übrige/unbekannte Teile: welche Sets in der GESAMTEN Rebrickable-Datenbank
+  // enthalten dieses Teil, egal ob eines der eigenen Sets oder nicht.
+  async function searchGlobalParts() {
+    if (!rebrickableKey.trim()) {
+      showToast("Bitte zuerst einen Rebrickable-API-Key im Zahnrad-Menü eintragen", "warn");
+      return;
+    }
+    if (!globalQuery.trim()) return;
+    setGlobalLoading(true);
+    setGlobalResults([]);
+    setSelectedGlobalPart(null);
+    setGlobalColors([]);
+    setSelectedGlobalColor(null);
+    setGlobalSets([]);
+    try {
+      const path = `/api/v3/lego/parts/?search=${encodeURIComponent(globalQuery.trim())}&page_size=20`;
+      const res = await fetch(`/api/rebrickable?path=${encodeURIComponent(path)}`, {
+        headers: { "x-rb-key": rebrickableKey.trim() },
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.detail || data?.error || `HTTP ${res.status}`);
+      setGlobalResults(data.results || []);
+      if ((data.results || []).length === 0) showToast("Keine Teile gefunden", "warn");
+    } catch (err) {
+      showToast(`Rebrickable-Fehler: ${err?.message || err}`.slice(0, 150), "warn");
+    } finally {
+      setGlobalLoading(false);
+    }
+  }
+
+  async function selectGlobalPart(part) {
+    setSelectedGlobalPart(part);
+    setGlobalColors([]);
+    setSelectedGlobalColor(null);
+    setGlobalSets([]);
+    setGlobalColorsLoading(true);
+    try {
+      const path = `/api/v3/lego/parts/${encodeURIComponent(part.part_num)}/colors/?page_size=60`;
+      const res = await fetch(`/api/rebrickable?path=${encodeURIComponent(path)}`, {
+        headers: { "x-rb-key": rebrickableKey.trim() },
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.detail || data?.error || `HTTP ${res.status}`);
+      setGlobalColors(data.results || []);
+    } catch (err) {
+      showToast(`Rebrickable-Fehler: ${err?.message || err}`.slice(0, 150), "warn");
+    } finally {
+      setGlobalColorsLoading(false);
+    }
+  }
+
+  async function selectGlobalColor(color) {
+    setSelectedGlobalColor(color);
+    setGlobalSets([]);
+    setGlobalSetsLoading(true);
+    try {
+      const path = `/api/v3/lego/parts/${encodeURIComponent(selectedGlobalPart.part_num)}/colors/${color.color_id}/sets/?page_size=30`;
+      const res = await fetch(`/api/rebrickable?path=${encodeURIComponent(path)}`, {
+        headers: { "x-rb-key": rebrickableKey.trim() },
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.detail || data?.error || `HTTP ${res.status}`);
+      setGlobalSets(data.results || []);
+      if ((data.results || []).length === 0) showToast("Keine Sets mit dieser Teil/Farb-Kombination gefunden", "warn");
+    } catch (err) {
+      showToast(`Rebrickable-Fehler: ${err?.message || err}`.slice(0, 150), "warn");
+    } finally {
+      setGlobalSetsLoading(false);
+    }
+  }
+
+
   function downloadTextFile(filename, mimeType, content) {
     const dataUri = `data:${mimeType};charset=utf-8,${encodeURIComponent(content)}`;
     const a = document.createElement("a");
@@ -1411,6 +1493,13 @@ export default function LegoScanner() {
             aria-label="Manuelle Suche"
           >
             <Search size={20} />
+          </button>
+          <button
+            onClick={() => setScreen(screen === "globalSearch" ? "setup" : "globalSearch")}
+            style={{ background: "transparent", border: "none", color: COLORS.textDim, padding: 6, display: "flex" }}
+            aria-label="Weltweite Teilesuche"
+          >
+            <BookOpen size={20} />
           </button>
           <button
             onClick={() => setScreen(screen === "overview" ? "setup" : "overview")}
@@ -2536,6 +2625,226 @@ export default function LegoScanner() {
               </>
             );
           })()}
+        </main>
+      )}
+
+      {screen === "globalSearch" && (
+        <main style={{ flex: 1, padding: 20, maxWidth: 480, margin: "0 auto", width: "100%" }}>
+          <h1 style={{ fontSize: 22, fontWeight: 800, marginBottom: 4, letterSpacing: "-0.02em" }}>
+            Weltweite Teilesuche
+          </h1>
+          <p style={{ color: COLORS.textDim, fontSize: 14, marginBottom: 16, lineHeight: 1.5 }}>
+            Für übrige/unbekannte Teile: durchsucht die komplette Rebrickable-Datenbank (nicht nur
+            deine eigenen Sets) und zeigt, welche Sets ein Teil enthalten.
+          </p>
+
+          <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
+            <input
+              value={globalQuery}
+              onChange={(e) => setGlobalQuery(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && searchGlobalParts()}
+              placeholder="Teilename oder -nummer, z.B. 'plate 2x4'"
+              style={{
+                flex: 1,
+                background: COLORS.panel,
+                border: `1px solid ${COLORS.panelBorder}`,
+                borderRadius: 10,
+                padding: "12px 14px",
+                color: COLORS.text,
+                fontSize: 15,
+              }}
+            />
+            <button
+              onClick={searchGlobalParts}
+              disabled={globalLoading}
+              style={{
+                background: COLORS.accent,
+                border: "none",
+                borderRadius: 10,
+                width: 46,
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+              }}
+              aria-label="Suchen"
+            >
+              {globalLoading ? (
+                <Loader2 size={18} color="#fff" style={{ animation: "spin 1s linear infinite" }} />
+              ) : (
+                <Search size={18} color="#fff" />
+              )}
+            </button>
+          </div>
+
+          {globalResults.length > 0 && !selectedGlobalPart && (
+            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+              {globalResults.map((p) => (
+                <button
+                  key={p.part_num}
+                  onClick={() => selectGlobalPart(p)}
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 12,
+                    background: COLORS.panel,
+                    border: `1px solid ${COLORS.panelBorder}`,
+                    borderRadius: 10,
+                    padding: 10,
+                    textAlign: "left",
+                  }}
+                >
+                  {p.part_img_url ? (
+                    <img
+                      src={p.part_img_url}
+                      alt=""
+                      style={{ width: 48, height: 48, objectFit: "contain", borderRadius: 6, background: "#fff", flexShrink: 0 }}
+                    />
+                  ) : (
+                    <div
+                      style={{
+                        width: 48,
+                        height: 48,
+                        borderRadius: 6,
+                        background: COLORS.bg,
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        flexShrink: 0,
+                      }}
+                    >
+                      <Package size={18} color={COLORS.textDim} />
+                    </div>
+                  )}
+                  <div style={{ minWidth: 0 }}>
+                    <div style={{ fontSize: 14, fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                      {p.name}
+                    </div>
+                    <div style={{ fontSize: 12, color: COLORS.textDim, marginTop: 2 }}>{p.part_num}</div>
+                  </div>
+                </button>
+              ))}
+            </div>
+          )}
+
+          {selectedGlobalPart && (
+            <div>
+              <button
+                onClick={() => {
+                  setSelectedGlobalPart(null);
+                  setGlobalColors([]);
+                  setSelectedGlobalColor(null);
+                  setGlobalSets([]);
+                }}
+                style={{ background: "transparent", border: "none", color: COLORS.textDim, fontSize: 13, padding: "0 0 12px", display: "block" }}
+              >
+                ← Andere Teile-Treffer
+              </button>
+
+              <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 16 }}>
+                {selectedGlobalPart.part_img_url && (
+                  <img
+                    src={selectedGlobalPart.part_img_url}
+                    alt=""
+                    style={{ width: 56, height: 56, objectFit: "contain", borderRadius: 8, background: "#fff", flexShrink: 0 }}
+                  />
+                )}
+                <div>
+                  <div style={{ fontSize: 16, fontWeight: 700 }}>{selectedGlobalPart.name}</div>
+                  <div style={{ fontSize: 12, color: COLORS.textDim }}>{selectedGlobalPart.part_num}</div>
+                </div>
+              </div>
+
+              <div style={{ fontSize: 13, color: COLORS.textDim, marginBottom: 8 }}>In welcher Farbe?</div>
+              {globalColorsLoading ? (
+                <div style={{ display: "flex", alignItems: "center", gap: 8, color: COLORS.textDim, fontSize: 13 }}>
+                  <Loader2 size={16} style={{ animation: "spin 1s linear infinite" }} /> Lade Farben...
+                </div>
+              ) : (
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 16 }}>
+                  {globalColors.map((c) => (
+                    <button
+                      key={c.color_id}
+                      onClick={() => selectGlobalColor(c)}
+                      style={{
+                        background: selectedGlobalColor?.color_id === c.color_id ? COLORS.accent : COLORS.panel,
+                        border: `1px solid ${selectedGlobalColor?.color_id === c.color_id ? COLORS.accent : COLORS.panelBorder}`,
+                        borderRadius: 20,
+                        padding: "7px 12px",
+                        color: selectedGlobalColor?.color_id === c.color_id ? "#fff" : COLORS.text,
+                        fontSize: 12,
+                      }}
+                    >
+                      {c.color_name}
+                    </button>
+                  ))}
+                </div>
+              )}
+
+              {selectedGlobalColor && (
+                <>
+                  <div style={{ fontSize: 13, color: COLORS.textDim, marginBottom: 8 }}>
+                    Sets mit {selectedGlobalPart.name} in {selectedGlobalColor.color_name}:
+                  </div>
+                  {globalSetsLoading ? (
+                    <div style={{ display: "flex", alignItems: "center", gap: 8, color: COLORS.textDim, fontSize: 13 }}>
+                      <Loader2 size={16} style={{ animation: "spin 1s linear infinite" }} /> Lade Sets...
+                    </div>
+                  ) : (
+                    <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                      {globalSets.map((s) => {
+                        const isMine = mySets.includes(s.set?.set_num);
+                        return (
+                          <div
+                            key={s.set?.set_num}
+                            style={{
+                              display: "flex",
+                              alignItems: "center",
+                              gap: 12,
+                              background: COLORS.panel,
+                              border: `1px solid ${isMine ? COLORS.good : COLORS.panelBorder}`,
+                              borderRadius: 10,
+                              padding: 10,
+                            }}
+                          >
+                            {s.set?.set_img_url ? (
+                              <img
+                                src={s.set.set_img_url}
+                                alt=""
+                                style={{ width: 44, height: 44, objectFit: "contain", borderRadius: 6, background: "#fff", flexShrink: 0 }}
+                              />
+                            ) : (
+                              <div
+                                style={{
+                                  width: 44,
+                                  height: 44,
+                                  borderRadius: 6,
+                                  background: COLORS.bg,
+                                  display: "flex",
+                                  alignItems: "center",
+                                  justifyContent: "center",
+                                  flexShrink: 0,
+                                }}
+                              >
+                                <Package size={16} color={COLORS.textDim} />
+                              </div>
+                            )}
+                            <div style={{ minWidth: 0, flex: 1 }}>
+                              <div style={{ fontSize: 13, fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                                {s.set?.name}
+                              </div>
+                              <div style={{ fontSize: 12, color: isMine ? COLORS.good : COLORS.textDim, marginTop: 2 }}>
+                                {s.set?.set_num} {isMine ? "· eines deiner Sets!" : ""}
+                              </div>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </>
+              )}
+            </div>
+          )}
         </main>
       )}
 
