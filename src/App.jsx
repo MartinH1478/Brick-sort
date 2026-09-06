@@ -1090,6 +1090,18 @@ export default function LegoScanner() {
 
   // Kategorisierung nach Bauteil-TYP für die manuelle Such-/Filterseite - basiert auf
   // Schlüsselwörtern im (englischen) Teilenamen von Rebrickable, daher eine Heuristik.
+  // Interpoliert zwischen Rot (0%) und Grün (100%) für Fortschritts-Prozentanzeigen.
+  function progressColor(pct) {
+    const clamped = Math.max(0, Math.min(100, pct));
+    const from = { r: 224, g: 57, b: 45 }; // COLORS.accent (Rot)
+    const to = { r: 63, g: 174, b: 107 }; // COLORS.good (Grün)
+    const t = clamped / 100;
+    const r = Math.round(from.r + (to.r - from.r) * t);
+    const g = Math.round(from.g + (to.g - from.g) * t);
+    const b = Math.round(from.b + (to.b - from.b) * t);
+    return `rgb(${r}, ${g}, ${b})`;
+  }
+
   function classifyPartCategory(entry) {
     const name = (entry.name || "").toLowerCase();
     if (name.includes("minifig") || name.includes("figure") || name.includes("torso") || name.includes(" head")) return "Figur";
@@ -2103,7 +2115,17 @@ export default function LegoScanner() {
                           <Package size={14} color={COLORS.textDim} />
                         </div>
                       )}
-                      <span style={{ fontSize: 15, fontWeight: 700, flex: 1 }}>{setNum}</span>
+                      <span style={{ fontSize: 15, fontWeight: 700, flex: 1, color: COLORS.text }}>{setNum}</span>
+                      <span
+                        style={{
+                          fontSize: 13,
+                          fontWeight: 700,
+                          color: progressColor(totalNeeded > 0 ? (totalCollected / totalNeeded) * 100 : 0),
+                          flexShrink: 0,
+                        }}
+                      >
+                        {totalNeeded > 0 ? Math.round((totalCollected / totalNeeded) * 100) : 0}%
+                      </span>
                       <span style={{ fontSize: 12, color: complete ? COLORS.good : COLORS.textDim, display: "flex", alignItems: "center", gap: 4, flexShrink: 0 }}>
                         {complete && <Check size={13} />}
                         {totalCollected}/{totalNeeded} Teile
@@ -2214,6 +2236,63 @@ export default function LegoScanner() {
                 );
               })
           )}
+
+          {(() => {
+            const setsWithLists = mySets.filter((s) => (partsLists[s] || []).length > 0);
+            if (setsWithLists.length === 0) return null;
+            let grandNeeded = 0;
+            let grandCollected = 0;
+            setsWithLists.forEach((setNum) => {
+              const list = partsLists[setNum] || [];
+              const counts = collectedCounts[setNum] || {};
+              list.forEach((p, idx) => {
+                grandNeeded += p.qty || 0;
+                grandCollected += Math.min(counts[idx] || 0, p.qty || 0);
+              });
+            });
+            const grandPct = grandNeeded > 0 ? (grandCollected / grandNeeded) * 100 : 0;
+            return (
+              <div
+                style={{
+                  marginTop: 8,
+                  background: COLORS.panel,
+                  border: `2px solid ${progressColor(grandPct)}`,
+                  borderRadius: 12,
+                  padding: 16,
+                }}
+              >
+                <div style={{ fontSize: 12, color: COLORS.textDim, fontWeight: 700, marginBottom: 8 }}>
+                  GESAMT ÜBER ALLE SETS
+                </div>
+                <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between" }}>
+                  <span style={{ fontSize: 28, fontWeight: 800, color: progressColor(grandPct) }}>
+                    {Math.round(grandPct)}%
+                  </span>
+                  <span style={{ fontSize: 14, color: COLORS.textDim }}>
+                    {grandCollected}/{grandNeeded} Teile
+                  </span>
+                </div>
+                <div
+                  style={{
+                    marginTop: 10,
+                    height: 8,
+                    borderRadius: 4,
+                    background: COLORS.bg,
+                    overflow: "hidden",
+                  }}
+                >
+                  <div
+                    style={{
+                      width: `${grandPct}%`,
+                      height: "100%",
+                      background: progressColor(grandPct),
+                      transition: "width 0.3s ease",
+                    }}
+                  />
+                </div>
+              </div>
+            );
+          })()}
         </main>
       )}
 
