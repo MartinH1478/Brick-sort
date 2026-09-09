@@ -374,6 +374,29 @@ export default function LegoScanner() {
   // ---------- Teileliste direkt von Rebrickable laden (öffentliche, offizielle Datenbank) ----------
   // Umgeht die Unsicherheiten/Grenzen von KI-basierter Bild-Extraktion komplett: echte
   // Herstellerdaten inkl. offizieller Teilbilder, direkt über einen Setnummer-Abgleich.
+  // Holt alle Seiten eines Rebrickable-Endpunkts (folgt "next"-Links automatisch).
+  async function fetchAllRebrickablePages(initialPath) {
+    let allResults = [];
+    let path = initialPath;
+    let guard = 0;
+    while (path && guard < 20) {
+      guard++;
+      const res = await fetch(`/api/rebrickable?path=${encodeURIComponent(path)}`, {
+        headers: { "x-rb-key": rebrickableKey.trim() },
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.detail || data?.error || `HTTP ${res.status}`);
+      allResults = allResults.concat(data.results || []);
+      if (data.next) {
+        const u = new URL(data.next);
+        path = u.pathname + u.search;
+      } else {
+        path = null;
+      }
+    }
+    return allResults;
+  }
+
   async function loadPartsListFromRebrickable(setNum) {
     if (!rebrickableKey.trim()) {
       showToast("Bitte zuerst einen Rebrickable-API-Key im Zahnrad-Menü eintragen", "warn");
@@ -381,26 +404,7 @@ export default function LegoScanner() {
     }
     setRebrickableLoadingFor(setNum);
     try {
-      let allResults = [];
-      let path = `/api/v3/lego/sets/${setNum}/parts/?page_size=1000`;
-      let guard = 0;
-      while (path && guard < 20) {
-        guard++;
-        const res = await fetch(`/api/rebrickable?path=${encodeURIComponent(path)}`, {
-          headers: { "x-rb-key": rebrickableKey.trim() },
-        });
-        const data = await res.json();
-        if (!res.ok) {
-          throw new Error(data?.detail || data?.error || `HTTP ${res.status}`);
-        }
-        allResults = allResults.concat(data.results || []);
-        if (data.next) {
-          const u = new URL(data.next);
-          path = u.pathname + u.search;
-        } else {
-          path = null;
-        }
-      }
+      const allResults = await fetchAllRebrickablePages(`/api/v3/lego/sets/${setNum}/parts/?page_size=1000`);
 
       if (allResults.length === 0) {
         showToast(`Keine Teile für Set ${setNum} gefunden — Setnummer korrekt (inkl. '-1')?`, "warn");
@@ -414,8 +418,37 @@ export default function LegoScanner() {
         qty: r.quantity || 0,
         imageUrl: r.part?.part_img_url || null,
       }));
+
+      // Figuren stehen in der normalen Teileliste nur als EIN Gesamtteil ("Minifigure, ...")
+      // - Kopf, Torso ("Kleidung"), Beine, Zubehör stecken NICHT einzeln darin. Dafür extra
+      // den Minifigs-Endpunkt abfragen und pro Figur deren Einzelteile mit aufnehmen.
+      try {
+        const minifigs = await fetchAllRebrickablePages(`/api/v3/lego/sets/${setNum}/minifigs/?page_size=200`);
+        for (const fig of minifigs) {
+          const figNum = fig.set_num || fig.fig_num;
+          const figQty = fig.quantity || 1;
+          if (!figNum) continue;
+          try {
+            const figParts = await fetchAllRebrickablePages(`/api/v3/lego/minifigs/${encodeURIComponent(figNum)}/parts/?page_size=200`);
+            figParts.forEach((r) => {
+              parts.push({
+                elementId: r.part?.part_num || "",
+                name: r.part?.name || "",
+                colorName: r.color?.name || "",
+                qty: (r.quantity || 0) * figQty,
+                imageUrl: r.part?.part_img_url || null,
+              });
+            });
+          } catch (e) {
+            // eine einzelne Figur überspringen, Rest trotzdem laden
+          }
+        }
+      } catch (e) {
+        // Minifigs-Abruf komplett fehlgeschlagen - Hauptliste ist trotzdem geladen
+      }
+
       persistPartsLists({ ...partsLists, [setNum]: parts });
-      showToast(`${parts.length} Teile für ${setNum} von Rebrickable geladen`, "good");
+      showToast(`${parts.length} Teile für ${setNum} von Rebrickable geladen (inkl. Figuren-Teile)`, "good");
     } catch (err) {
       showToast(`Rebrickable-Fehler: ${err?.message || err}`.slice(0, 150), "warn");
     } finally {
