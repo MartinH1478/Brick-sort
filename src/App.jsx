@@ -531,13 +531,17 @@ export default function LegoScanner() {
 
 
   function downloadTextFile(filename, mimeType, content) {
-    const dataUri = `data:${mimeType};charset=utf-8,${encodeURIComponent(content)}`;
+    // Blob + Object-URL statt "data:"-URI - letztere haben in vielen Browsern (v.a. Chrome auf
+    // Android) eine harte Längenbegrenzung und brechen bei größeren Dateien lautlos ab.
+    const blob = new Blob([content], { type: mimeType });
+    const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
-    a.href = dataUri;
+    a.href = url;
     a.download = filename;
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
+    setTimeout(() => URL.revokeObjectURL(url), 10000);
   }
 
   function exportMissingListCsv() {
