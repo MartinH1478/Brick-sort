@@ -625,6 +625,16 @@ export default function LegoScanner() {
   }
 
   function removeSet(setNum) {
+    const list = partsLists[setNum] || [];
+    const counts = collectedCounts[setNum] || {};
+    const collected = list.reduce((sum, p, idx) => sum + Math.min(counts[idx] || 0, p.qty || 0), 0);
+    const needed = list.reduce((sum, p) => sum + (p.qty || 0), 0);
+    const progressNote = needed > 0 ? ` (aktueller Fortschritt: ${collected}/${needed} Teile)` : "";
+    const ok = window.confirm(
+      `Set ${setNum} wirklich entfernen?${progressNote}\n\nTeileliste und Fortschritt für dieses Set gehen dabei verloren.`
+    );
+    if (!ok) return;
+
     persistSets(mySets.filter((s) => s !== setNum));
     const next = { ...partsLists };
     delete next[setNum];
