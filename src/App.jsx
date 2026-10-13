@@ -98,7 +98,7 @@ export default function LegoScanner() {
   const [searchSetFilter, setSearchSetFilter] = useState("all");
   const [searchColorFilter, setSearchColorFilter] = useState("all");
   const [searchCategoryFilter, setSearchCategoryFilter] = useState("all");
-  const [searchSizeFilter, setSearchSizeFilter] = useState("all");
+  const [searchStatusFilter, setSearchStatusFilter] = useState("all");
   const [searchOnlyOpen, setSearchOnlyOpen] = useState(true);
   const [searchShowCount, setSearchShowCount] = useState(60);
   const [expandedSearchGroup, setExpandedSearchGroup] = useState(null);
@@ -1149,6 +1149,22 @@ export default function LegoScanner() {
     return `rgb(${r}, ${g}, ${b})`;
   }
 
+  // Figuren-Teile: Torso, Hips, Minifig, Equipment, Accessory, Weapon usw.
+  function isFigurPart(entry) {
+    const name = (entry.name || "").toLowerCase();
+    return [
+      "minifig", "figure", "torso", "hips", "equipment", "accessory", "accessories", "weapon",
+      " head", "legs", "hair", "headgear", "helmet", "cape", "visor", "neck", "sword", "blaster", "lightsaber",
+    ].some((k) => name.includes(k));
+  }
+
+  function matchesCategory(entry, cat) {
+    const name = (entry.name || "").toLowerCase();
+    if (cat === "Figur") return isFigurPart(entry);
+    if (cat === "Curved") return name.includes("curved");
+    return classifyPartCategory(entry) === cat;
+  }
+
   function classifyPartCategory(entry) {
     const name = (entry.name || "").toLowerCase();
     if (name.includes("minifig") || name.includes("figure") || name.includes("torso") || name.includes(" head")) return "Figur";
@@ -1169,6 +1185,7 @@ export default function LegoScanner() {
     if (name.includes("bracket")) return "Bracket";
     if (name.includes("hinge")) return "Hinge";
     if (name.includes("wedge")) return "Wedge";
+    if (name.includes("curved")) return "Curved";
     if (name.includes("slope")) return "Sloped";
     if (name.startsWith("plate") || name.includes(" plate")) return "Plate";
     if (name.startsWith("tile") || name.includes(" tile")) return "Tile";
@@ -1181,6 +1198,9 @@ export default function LegoScanner() {
   // landen z.B. beide unter "Grün".
   function simplifyColor(colorName) {
     const c = (colorName || "").toLowerCase();
+    if (c.includes("lime")) return "Grün";
+    if (c.includes("azure")) return "Blau";
+    if (c.includes("nougat")) return "Braun";
     if (c.includes("gray") || c.includes("grey")) return "Grau";
     if (c.includes("black")) return "Schwarz";
     if (c.includes("white")) return "Weiß";
@@ -2378,16 +2398,6 @@ export default function LegoScanner() {
                 setsWithLists.flatMap((s) => (partsLists[s] || []).map((p) => simplifyColor(p.colorName)).filter(Boolean))
               )
             ).sort();
-            const allSizes = Array.from(
-              new Set(
-                setsWithLists.flatMap((s) => (partsLists[s] || []).map((p) => extractDimsLocal(p.name)).filter(Boolean))
-              )
-            ).sort((a, b) => {
-              const [a1, a2] = a.split("x").map(Number);
-              const [b1, b2] = b.split("x").map(Number);
-              return a1 * a2 - b1 * b2 || a1 - b1;
-            });
-
             return (
               <>
                 <div style={{ display: "flex", gap: 8, marginBottom: 8 }}>
@@ -2463,6 +2473,7 @@ export default function LegoScanner() {
                     <option value="Wheel">Wheel</option>
                     <option value="Weapon">Weapon</option>
                     <option value="Sloped">Sloped</option>
+                    <option value="Curved">Curved</option>
                     <option value="Wedge">Wedge</option>
                     <option value="Bracket">Bracket</option>
                     <option value="Hinge">Hinge</option>
@@ -2471,9 +2482,9 @@ export default function LegoScanner() {
                     <option value="Sonstiges">Sonstiges</option>
                   </select>
                   <select
-                    value={searchSizeFilter}
+                    value={searchStatusFilter}
                     onChange={(e) => {
-                      setSearchSizeFilter(e.target.value);
+                      setSearchStatusFilter(e.target.value);
                       setSearchShowCount(60);
                     }}
                     style={{
@@ -2486,12 +2497,10 @@ export default function LegoScanner() {
                       fontSize: 12,
                     }}
                   >
-                    <option value="all">Alle Größen</option>
-                    {allSizes.map((s) => (
-                      <option key={s} value={s}>
-                        {s}
-                      </option>
-                    ))}
+                    <option value="all">Alle Status</option>
+                    <option value="open">Noch nichts gefunden</option>
+                    <option value="partial">Teilweise gefunden</option>
+                    <option value="done">Vollständig</option>
                   </select>
                 </div>
 
@@ -2533,8 +2542,10 @@ export default function LegoScanner() {
                       const remaining = Math.max(0, (entry.qty || 0) - collected);
                       if (searchOnlyOpen && remaining <= 0) return;
                       if (searchColorFilter !== "all" && simplifyColor(entry.colorName) !== searchColorFilter) return;
-                      if (searchCategoryFilter !== "all" && classifyPartCategory(entry) !== searchCategoryFilter) return;
-                      if (searchSizeFilter !== "all" && extractDimsLocal(entry.name) !== searchSizeFilter) return;
+                      if (searchCategoryFilter !== "all" && !matchesCategory(entry, searchCategoryFilter)) return;
+                      if (searchStatusFilter === "open" && collected > 0) return;
+                      if (searchStatusFilter === "partial" && !(collected > 0 && remaining > 0)) return;
+                      if (searchStatusFilter === "done" && remaining > 0) return;
                       if (qTerms.length > 0) {
                         const hay = `${entry.name || ""} ${entry.colorName || ""} ${entry.elementId || ""} ${setNum}`
                           .toLowerCase()
@@ -2614,6 +2625,7 @@ export default function LegoScanner() {
                                   background: "transparent",
                                   border: "none",
                                   textAlign: "left",
+                                  color: COLORS.text,
                                 }}
                               >
                                 {g.imageUrl ? (
@@ -2639,7 +2651,7 @@ export default function LegoScanner() {
                                   </div>
                                 )}
                                 <div style={{ flex: 1, minWidth: 0 }}>
-                                  <div style={{ fontSize: 14, fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                                  <div style={{ fontSize: 14, fontWeight: 600, color: "#d4d4d8", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                                     {g.name}
                                   </div>
                                   <div style={{ fontSize: 12, color: COLORS.textDim, marginTop: 2 }}>
@@ -2681,7 +2693,26 @@ export default function LegoScanner() {
                                             padding: "6px 8px",
                                           }}
                                         >
-                                          <span style={{ fontSize: 13, fontWeight: 600 }}>{r.setNum}</span>
+                                          <button
+                                            onClick={() => {
+                                              setSearchSetFilter(r.setNum);
+                                              setSearchShowCount(60);
+                                              setExpandedSearchGroup(null);
+                                            }}
+                                            aria-label={`Nach Set ${r.setNum} filtern`}
+                                            style={{
+                                              background: COLORS.panel,
+                                              border: `1px solid ${COLORS.panelBorder}`,
+                                              borderRadius: 6,
+                                              padding: "4px 8px",
+                                              fontSize: 13,
+                                              fontWeight: 600,
+                                              color: "#d4d4d8",
+                                              textDecoration: "underline",
+                                            }}
+                                          >
+                                            {r.setNum}
+                                          </button>
                                           <span style={{ fontSize: 12, color: found ? COLORS.good : COLORS.textDim }}>
                                             {r.collected}/{r.entry.qty}
                                           </span>
