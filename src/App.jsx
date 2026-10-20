@@ -1155,7 +1155,8 @@ export default function LegoScanner() {
     return [
       "minifig", "figure", "torso", "hips", "equipment", "accessory", "accessories", "weapon",
       " head", "legs", "hair", "headgear", "helmet", "cape", "visor", "neck", "sword", "blaster", "lightsaber",
-    ].some((k) => name.includes(k));
+      "wrap",
+    ].some((k) => name.includes(k)) || /(^|[\s,(-])cap($|[\s,)-])/.test(name);
   }
 
   function matchesCategory(entry, cat) {
