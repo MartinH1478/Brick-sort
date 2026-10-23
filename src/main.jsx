@@ -3,21 +3,31 @@ import ReactDOM from "react-dom/client";
 import App from "./App.jsx";
 
 // ---------- window.storage Polyfill (ersetzt Claudes Artifact-Speicher-API) ----------
-// Gleiche Schnittstelle wie im Claude-Artifact (get/set/delete/list, async). Nutzt den
-// gemeinsamen Online-Speicher (/api/storage, Upstash Redis).
+// Gleiche Schnittstelle wie im Claude-Artifact (get/set/delete/list, async).
 //
-// Sicherheitsnetz gegen Datenverlust:
-//  - Jede Änderung wird ZUERST lokal im Browser gespeichert (sofort, auch wenn die Seite
-//    gleich geschlossen wird) und als "noch nicht in der Cloud bestätigt" markiert.
-//  - Erst wenn die Cloud den Schreibvorgang bestätigt, wird die Markierung entfernt.
-//  - Beim Lesen gewinnt ein unbestätigter lokaler Stand gegenüber der Cloud, und die
-//    Übertragung wird erneut versucht (beim Start, bei Internet-Rückkehr, beim Zurückkehren
-//    in die App).
-//  - Schreibvorgänge pro Schlüssel laufen nacheinander, damit ein älterer Stand nie einen
-//    neueren überholt.
-//  - Schlägt die Cloud fehl, erscheint ein sichtbarer Hinweis statt stillem Weitermachen.
+// Speicherort: IndexedDB direkt im Browser des Handys (kein praktisches Größenlimit, anders
+// als localStorage mit ca. 5 MB oder die Cloud-Schnittstelle mit ihren Größenbegrenzungen).
+// Die Cloud (Upstash) wird nicht mehr zum Speichern benutzt - nur EINMALIG beim ersten Start,
+// um den bisherigen Stand ins Handy zu übernehmen. Der alte Cloud-Stand bleibt dabei
+// unangetastet und dient als zusätzliche Sicherung.
+//
+// WICHTIG: Die Daten liegen nur in diesem Browser. Browser-Daten löschen = Daten weg.
+// Deshalb regelmäßig im Zahnrad-Menü eine Sicherung herunterladen.
 const PREFIX = "brick-sorter:";
 const PENDING = "brick-sorter-pending:";
+const DB_NAME = "brick-sorter-db";
+const STORE = "kv";
+const KEYS = [
+  "my-sets",
+  "scan-log",
+  "parts-lists",
+  "collected-counts",
+  "parts-list-pages",
+  "part-images",
+  "rebrickable-api-key",
+  "set-meta",
+  "figures",
+];
 
 function lsGet(k) {
   try {
@@ -40,7 +50,7 @@ function lsDel(k) {
   } catch (e) {}
 }
 
-// ---------- sichtbarer Hinweis bei Cloud-Problemen ----------
+// ---------- sichtbarer Hinweis ----------
 let bannerEl = null;
 function showBanner(text) {
   try {
@@ -59,124 +69,136 @@ function hideBanner() {
   if (bannerEl) bannerEl.style.display = "none";
 }
 
-// ---------- Schreib-Warteschlange pro Schlüssel ----------
-const chains = {};
-
-async function pushToCloud(key) {
-  const value = lsGet(PREFIX + key);
-  if (value === null) return true;
-  // keepalive hilft kleinen Schreibvorgängen, auch beim Schließen der Seite noch anzukommen
-  const res = await fetch("/api/storage", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ key, value }),
-    keepalive: value.length < 50000,
-  });
-  const data = await res.json();
-  if (!res.ok || data.error) throw new Error(data.error || "Speicher-Fehler");
-  // Nur bestätigen, wenn sich der lokale Stand zwischenzeitlich nicht erneut geändert hat
-  if (lsGet(PREFIX + key) === value) lsDel(PENDING + key);
-  return true;
-}
-
-function schedulePush(key) {
-  const prev = chains[key] || Promise.resolve();
-  const next = prev
-    .catch(() => {})
-    .then(() => pushToCloud(key))
-    .then(() => {
-      if (pendingKeys().length === 0) hideBanner();
-    })
-    .catch(() => {
-      showBanner("Cloud-Speicherung gerade nicht möglich – deine Änderungen sind lokal gesichert und werden später übertragen.");
+// ---------- IndexedDB ----------
+let dbPromise = null;
+function openDb() {
+  if (!dbPromise) {
+    dbPromise = new Promise((resolve, reject) => {
+      const req = indexedDB.open(DB_NAME, 1);
+      req.onupgradeneeded = () => req.result.createObjectStore(STORE);
+      req.onsuccess = () => resolve(req.result);
+      req.onerror = () => reject(req.error);
     });
-  chains[key] = next;
-  return next;
+  }
+  return dbPromise;
+}
+async function idbGet(key) {
+  const db = await openDb();
+  return new Promise((resolve, reject) => {
+    const r = db.transaction(STORE, "readonly").objectStore(STORE).get(key);
+    r.onsuccess = () => resolve(r.result === undefined ? null : r.result);
+    r.onerror = () => reject(r.error);
+  });
+}
+async function idbSet(key, value) {
+  const db = await openDb();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(STORE, "readwrite");
+    tx.objectStore(STORE).put(value, key);
+    tx.oncomplete = () => resolve(true);
+    tx.onerror = () => reject(tx.error);
+    tx.onabort = () => reject(tx.error);
+  });
+}
+async function idbDel(key) {
+  const db = await openDb();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(STORE, "readwrite");
+    tx.objectStore(STORE).delete(key);
+    tx.oncomplete = () => resolve(true);
+    tx.onerror = () => reject(tx.error);
+  });
 }
 
-function pendingKeys() {
-  const keys = [];
+let idbOk = true;
+
+// ---------- einmalige Übernahme des bisherigen Standes ----------
+// Pro Schlüssel: unbestätigter lokaler Stand (aus der letzten Version) > Cloud > lokale Kopie.
+const ready = (async () => {
   try {
-    for (let i = 0; i < localStorage.length; i++) {
-      const k = localStorage.key(i);
-      if (k && k.startsWith(PENDING)) keys.push(k.slice(PENDING.length));
+    try {
+      // Bitte den Browser, die Daten nicht automatisch zu verwerfen
+      if (navigator.storage && navigator.storage.persist) navigator.storage.persist();
+    } catch (e) {}
+    await openDb();
+    if ((await idbGet("__migrated__")) === "1") return;
+    let incomplete = false;
+    for (const k of KEYS) {
+      if ((await idbGet(k)) !== null) continue;
+      const local = lsGet(PREFIX + k);
+      const pending = lsGet(PENDING + k) !== null;
+      let val = null;
+      if (pending && local !== null) {
+        val = local;
+      } else {
+        try {
+          const res = await fetch(`/api/storage?key=${encodeURIComponent(k)}`);
+          const data = await res.json();
+          if (!res.ok || data.error) throw new Error(data.error || "Speicher-Fehler");
+          if (data.value !== null && data.value !== undefined) val = data.value;
+        } catch (e) {
+          incomplete = true;
+        }
+        if (val === null && local !== null) val = local;
+      }
+      if (val !== null) await idbSet(k, val);
     }
-  } catch (e) {}
-  return keys;
-}
-
-function flushPending() {
-  pendingKeys().forEach((k) => schedulePush(k));
-}
-
-window.addEventListener("online", flushPending);
-document.addEventListener("visibilitychange", () => {
-  if (document.visibilityState === "visible") flushPending();
-});
+    if (incomplete) {
+      showBanner("Übernahme der Cloud-Daten unvollständig (kein Internet?). Bitte App mit Internet neu starten, bevor du sortierst.");
+    } else {
+      await idbSet("__migrated__", "1");
+    }
+  } catch (e) {
+    idbOk = false;
+    showBanner("Lokaler Speicher (IndexedDB) nicht verfügbar – Änderungen werden nur eingeschränkt gesichert.");
+  }
+})();
 
 window.storage = {
   async get(key) {
-    // Unbestätigter lokaler Stand hat Vorrang vor der Cloud (sonst gehen Änderungen verloren)
-    if (lsGet(PENDING + key) !== null) {
-      const local = lsGet(PREFIX + key);
-      if (local !== null) {
-        schedulePush(key);
-        return { key, value: local, shared: false };
-      }
+    await ready;
+    if (idbOk) {
+      try {
+        const v = await idbGet(key);
+        return v === null ? null : { key, value: v, shared: false };
+      } catch (e) {}
     }
-    try {
-      const res = await fetch(`/api/storage?key=${encodeURIComponent(key)}`);
-      const data = await res.json();
-      if (!res.ok || data.error) throw new Error(data.error || "Speicher-Fehler");
-      if (data.value === null || data.value === undefined) return null;
-      return { key, value: data.value, shared: true };
-    } catch (e) {
-      const local = lsGet(PREFIX + key);
-      return local === null ? null : { key, value: local, shared: false };
-    }
+    const local = lsGet(PREFIX + key);
+    return local === null ? null : { key, value: local, shared: false };
   },
   async set(key, value) {
-    const stored = lsSet(PREFIX + key, value);
-    if (stored) lsSet(PENDING + key, "1");
-    if (!stored) {
-      // Lokaler Speicher voll (sehr große Daten) - dann direkt und ohne Netz-Sicherung senden
+    await ready;
+    if (idbOk) {
       try {
-        const res = await fetch("/api/storage", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ key, value }),
-        });
-        const data = await res.json();
-        if (!res.ok || data.error) throw new Error(data.error || "Speicher-Fehler");
-        return { key, value, shared: true };
-      } catch (e) {
-        showBanner("Speichern fehlgeschlagen (Daten zu groß für lokalen Speicher und Cloud nicht erreichbar).");
+        await idbSet(key, value);
+        hideBanner();
         return { key, value, shared: false };
+      } catch (e) {
+        showBanner("Speichern fehlgeschlagen – bitte jetzt eine Sicherung herunterladen!");
+        throw e;
       }
     }
-    await schedulePush(key);
-    return { key, value, shared: lsGet(PENDING + key) === null };
+    if (!lsSet(PREFIX + key, value)) {
+      showBanner("Speichern fehlgeschlagen (Speicher voll) – bitte eine Sicherung herunterladen!");
+      throw new Error("Speicher voll");
+    }
+    return { key, value, shared: false };
   },
   async delete(key) {
-    lsDel(PENDING + key);
-    lsDel(PREFIX + key);
+    await ready;
     try {
-      const res = await fetch(`/api/storage?key=${encodeURIComponent(key)}`, { method: "DELETE" });
-      const data = await res.json();
-      if (!res.ok || data.error) throw new Error(data.error || "Speicher-Fehler");
-      return { key, deleted: !!data.deleted, shared: true };
+      if (idbOk) await idbDel(key);
+      lsDel(PREFIX + key);
+      return { key, deleted: true, shared: false };
     } catch (e) {
       return { key, deleted: false, shared: false };
     }
   },
   async list() {
     // Wird von der App aktuell nicht genutzt.
-    return { keys: [], shared: true };
+    return { keys: [], shared: false };
   },
 };
-
-// Beim Start noch offene Übertragungen nachholen
-flushPending();
 
 ReactDOM.createRoot(document.getElementById("root")).render(
   <React.StrictMode>
