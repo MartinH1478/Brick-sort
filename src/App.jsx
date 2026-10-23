@@ -217,7 +217,39 @@ export default function LegoScanner() {
       } catch (e) {}
       try {
         const c = await window.storage.get(STORAGE_KEY_COLLECTED);
-        if (c) setCollectedCounts(JSON.parse(c.value));
+        let counts = c ? JSON.parse(c.value) : {};
+        // Einmalige Rettung: Frühere Versionen haben bei Cloud-Problemen still nur lokal im
+        // Browser gespeichert. Höhere Zähler aus dieser lokalen Kopie werden übernommen.
+        try {
+          const RESCUE_FLAG = "brick-sorter:rescue-v1-done";
+          if (!localStorage.getItem(RESCUE_FLAG)) {
+            const raw = localStorage.getItem("brick-sorter:collected-counts");
+            if (raw) {
+              const local = JSON.parse(raw);
+              let gained = 0;
+              const merged = { ...counts };
+              Object.keys(local || {}).forEach((setNum) => {
+                const mergedSet = { ...(merged[setNum] || {}) };
+                Object.keys(local[setNum] || {}).forEach((idx) => {
+                  const lv = local[setNum][idx] || 0;
+                  const cv = mergedSet[idx] || 0;
+                  if (lv > cv) {
+                    gained += lv - cv;
+                    mergedSet[idx] = lv;
+                  }
+                });
+                merged[setNum] = mergedSet;
+              });
+              if (gained > 0) {
+                counts = merged;
+                window.storage.set(STORAGE_KEY_COLLECTED, JSON.stringify(merged));
+                setTimeout(() => showToast(`${gained} verlorene Zuordnungen aus dem lokalen Speicher wiederhergestellt`, "good"), 1500);
+              }
+            }
+            localStorage.setItem(RESCUE_FLAG, "1");
+          }
+        } catch (e) {}
+        if (c || Object.keys(counts).length > 0) setCollectedCounts(counts);
       } catch (e) {}
       try {
         const pg = await window.storage.get(STORAGE_KEY_LIST_PAGES);
@@ -2951,17 +2983,34 @@ export default function LegoScanner() {
               const list = partsLists[setNum] || [];
               const counts = collectedCounts[setNum] || {};
               (figures[setNum] || []).forEach((fig, fi) => {
-                let total = 0;
-                let done = 0;
-                const parts = fig.parts.map((p) => {
-                  const entry = p.idx >= 0 ? list[p.idx] : null;
-                  const valid = !!entry && entry.elementId === p.elementId && entry.colorName === p.colorName;
-                  const collected = valid ? Math.min(counts[p.idx] || 0, p.qty) : 0;
-                  total += p.qty;
-                  done += collected;
-                  return { ...p, valid, collected };
-                });
-                all.push({ key: `${setNum}|${fig.figNum}|${fi}`, setNum, fig, parts, total, done, pct: total > 0 ? done / total : 0 });
+                // Mehrfach enthaltene Figuren (quantity > 1) als getrennte Karten auflisten.
+                // Die Teile-Zähler gelten für alle Exemplare zusammen und werden der Reihe
+                // nach auf die Exemplare verteilt (erst Exemplar 1 voll, dann 2 usw.).
+                const copies = Math.max(1, fig.quantity || 1);
+                for (let k = 0; k < copies; k++) {
+                  let total = 0;
+                  let done = 0;
+                  const parts = fig.parts.map((p) => {
+                    const entry = p.idx >= 0 ? list[p.idx] : null;
+                    const valid = !!entry && entry.elementId === p.elementId && entry.colorName === p.colorName;
+                    const perQty = Math.max(1, Math.round(p.qty / copies));
+                    const sharedCollected = valid ? Math.min(counts[p.idx] || 0, p.qty) : 0;
+                    const collected = Math.max(0, Math.min(perQty, sharedCollected - k * perQty));
+                    total += perQty;
+                    done += collected;
+                    return { ...p, qty: perQty, valid, collected };
+                  });
+                  all.push({
+                    key: `${setNum}|${fig.figNum}|${fi}|${k}`,
+                    setNum,
+                    fig,
+                    copyLabel: copies > 1 ? ` (${k + 1}/${copies})` : "",
+                    parts,
+                    total,
+                    done,
+                    pct: total > 0 ? done / total : 0,
+                  });
+                }
               });
             });
 
@@ -3195,7 +3244,7 @@ export default function LegoScanner() {
                           <div style={{ flex: 1, minWidth: 0 }}>
                             <div style={{ fontSize: 14, fontWeight: 600, color: "#d4d4d8", lineHeight: 1.3 }}>
                               {f.fig.name}
-                              {f.fig.quantity > 1 ? ` ×${f.fig.quantity}` : ""}
+                              {f.copyLabel}
                             </div>
                             <div style={{ fontSize: 12, color: COLORS.textDim, marginTop: 2 }}>
                               Set {f.setNum} · {f.done}/{f.total} Teile
