@@ -17,6 +17,7 @@ import {
   Minus,
   Search,
   BookOpen,
+  Users,
 } from "lucide-react";
 
 // ---------- Farbtokens ----------
@@ -40,6 +41,7 @@ const STORAGE_KEY_LIST_PAGES = "parts-list-pages"; // { [setNum]: ["<base64 jpeg
 const STORAGE_KEY_PART_IMAGES = "part-images"; // { [setNum]: ["<dataURL oder null>", ...] } - ein Bild pro Teil, Index = partsLists-Index
 const STORAGE_KEY_RB_KEY = "rebrickable-api-key";
 const STORAGE_KEY_SET_META = "set-meta"; // { [setNum]: { name, imgUrl } }
+const STORAGE_KEY_FIGURES = "figures"; // { [setNum]: [{ figNum, name, imgUrl, quantity, parts: [{ idx, elementId, name, colorName, qty, imageUrl }] }] }
 
 // Gemeinsame Farbpalette für Foto-Erkennung UND PDF-Teileliste, damit beide Seiten
 // dieselben Begriffe verwenden und der Abgleich nicht an unterschiedlichen Farbnamen scheitert.
@@ -81,7 +83,7 @@ function makePhotoItem(id, base64) {
 }
 
 export default function LegoScanner() {
-  const [screen, setScreen] = useState("setup"); // setup | scan | overview | search | globalSearch
+  const [screen, setScreen] = useState("setup"); // setup | scan | overview | search | globalSearch | figures
   const [mySets, setMySets] = useState([]);
   const [newSetInput, setNewSetInput] = useState("");
   const [partsLists, setPartsLists] = useState({}); // { [setNum]: [{elementId, name, colorName, qty}] }
@@ -93,6 +95,15 @@ export default function LegoScanner() {
   const [rebrickableLoadingFor, setRebrickableLoadingFor] = useState(null);
   const [setMeta, setSetMeta] = useState({}); // { [setNum]: { name, imgUrl } }
   const [expandedSetNum, setExpandedSetNum] = useState(null);
+  const [figures, setFigures] = useState({}); // { [setNum]: [{ figNum, name, imgUrl, quantity, parts: [...] }] }
+  const [figuresProgress, setFiguresProgress] = useState(null); // Text während des Nachladens, sonst null
+  const figuresCancelRef = useRef(false);
+  const [figureQuery, setFigureQuery] = useState("");
+  const [figureSetFilter, setFigureSetFilter] = useState("all");
+  const [figureStatusFilter, setFigureStatusFilter] = useState("all");
+  const [figureSort, setFigureSort] = useState("progress");
+  const [figureShowCount, setFigureShowCount] = useState(40);
+  const [expandedFigure, setExpandedFigure] = useState(null);
   const [expandedOverviewSet, setExpandedOverviewSet] = useState(null);
   const [searchQuery, setSearchQuery] = useState("");
   const [searchSetFilter, setSearchSetFilter] = useState("all");
@@ -228,6 +239,10 @@ export default function LegoScanner() {
         if (sm) setSetMeta(JSON.parse(sm.value));
       } catch (e) {}
       try {
+        const fg = await window.storage.get(STORAGE_KEY_FIGURES);
+        if (fg) setFigures(JSON.parse(fg.value));
+      } catch (e) {}
+      try {
         const l = await window.storage.get(STORAGE_KEY_LOG);
         if (l) setLog(JSON.parse(l.value));
       } catch (e) {}
@@ -318,6 +333,13 @@ export default function LegoScanner() {
     setRebrickableKey(key);
     try {
       await window.storage.set(STORAGE_KEY_RB_KEY, key);
+    } catch (e) {}
+  }
+
+  async function persistFigures(next) {
+    setFigures(next);
+    try {
+      await window.storage.set(STORAGE_KEY_FIGURES, JSON.stringify(next));
     } catch (e) {}
   }
 
@@ -456,6 +478,110 @@ export default function LegoScanner() {
     }
   }
 
+  // ---------- Figuren-Ansicht: Figurendaten nachladen ----------
+  // Holt pro Set die Minifiguren (Name, Bild) und ordnet deren Einzelteile den bereits
+  // vorhandenen Zeilen der Teileliste zu. Dadurch teilen sich Figuren-Ansicht und normale
+  // Suche denselben Fortschritt - es wird nichts doppelt gezählt.
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+  async function rbFetchPages(path) {
+    // Rebrickable drosselt (ca. 1 Anfrage/Sekunde) - bei "throttled" kurz warten und wiederholen.
+    for (let attempt = 0; attempt < 4; attempt++) {
+      try {
+        return await fetchAllRebrickablePages(path);
+      } catch (e) {
+        const msg = String(e?.message || e).toLowerCase();
+        if (attempt < 3 && (msg.includes("throttl") || msg.includes("429"))) {
+          await sleep(5000);
+          continue;
+        }
+        throw e;
+      }
+    }
+    return [];
+  }
+
+  async function buildFiguresForSet(setNum) {
+    const list = partsLists[setNum] || [];
+    const minifigs = await rbFetchPages(`/api/v3/lego/sets/${setNum}/minifigs/?page_size=200`);
+    const fetched = [];
+    let total = 0;
+    for (const fig of minifigs) {
+      const figNum = fig.set_num || fig.fig_num;
+      if (!figNum) continue;
+      await sleep(600);
+      let figParts = [];
+      try {
+        figParts = await rbFetchPages(`/api/v3/lego/minifigs/${encodeURIComponent(figNum)}/parts/?page_size=200`);
+      } catch (e) {
+        figParts = [];
+      }
+      fetched.push({ fig, figNum, figParts });
+      total += figParts.length;
+    }
+    // Die Figurenteile wurden beim Laden hinten an die Liste angehängt - dort zuerst suchen.
+    const boundary = Math.max(0, list.length - total);
+    const claimed = new Set();
+    return fetched.map(({ fig, figNum, figParts }) => {
+      const figQty = fig.quantity || 1;
+      const parts = figParts.map((r) => {
+        const elementId = r.part?.part_num || "";
+        const colorName = r.color?.name || "";
+        const qty = (r.quantity || 0) * figQty;
+        let idx = -1;
+        for (let pass = 0; pass < 2 && idx < 0; pass++) {
+          for (let i = pass === 0 ? boundary : 0; i < list.length; i++) {
+            if (claimed.has(i)) continue;
+            const e = list[i];
+            if (e.elementId === elementId && e.colorName === colorName && (e.qty || 0) === qty) {
+              idx = i;
+              break;
+            }
+          }
+        }
+        if (idx >= 0) claimed.add(idx);
+        return { idx, elementId, name: r.part?.name || "", colorName, qty, imageUrl: r.part?.part_img_url || null };
+      });
+      return {
+        figNum,
+        name: fig.set_name || fig.name || figNum,
+        imgUrl: fig.set_img_url || null,
+        quantity: figQty,
+        parts,
+      };
+    });
+  }
+
+  async function loadFiguresForSets(onlyMissing = true) {
+    if (!rebrickableKey.trim()) {
+      showToast("Bitte zuerst einen Rebrickable-API-Key im Zahnrad-Menü eintragen", "warn");
+      return;
+    }
+    const todo = mySets.filter((s) => (partsLists[s] || []).length > 0 && (!onlyMissing || !figures[s]));
+    if (todo.length === 0) {
+      showToast("Alle Sets haben bereits Figurendaten", "good");
+      return;
+    }
+    figuresCancelRef.current = false;
+    let acc = { ...figures };
+    let failed = 0;
+    for (let i = 0; i < todo.length; i++) {
+      if (figuresCancelRef.current) break;
+      const setNum = todo[i];
+      setFiguresProgress(`Lade Figuren … Set ${i + 1} von ${todo.length} (${setNum})`);
+      try {
+        acc = { ...acc, [setNum]: await buildFiguresForSet(setNum) };
+        await persistFigures(acc);
+      } catch (e) {
+        failed++;
+      }
+      await sleep(600);
+    }
+    setFiguresProgress(null);
+    const done = figuresCancelRef.current ? "Abgebrochen" : "Figuren geladen";
+    showToast(failed > 0 ? `${done} — bei ${failed} Set(s) gab es Fehler, nochmal starten` : done, failed > 0 ? "warn" : "good");
+  }
+
   // ---------- Weltweite Rebrickable-Suche (unabhängig von den eigenen Sets) ----------
   // Für übrige/unbekannte Teile: welche Sets in der GESAMTEN Rebrickable-Datenbank
   // enthalten dieses Teil, egal ob eines der eigenen Sets oder nicht.
@@ -576,6 +702,7 @@ export default function LegoScanner() {
       collectedCounts,
       partsListPages,
       partImages,
+      figures,
       log,
     };
     downloadTextFile(
@@ -604,6 +731,7 @@ export default function LegoScanner() {
       await persistCollectedCounts(backup.collectedCounts || {});
       await persistPartsListPages(backup.partsListPages || {});
       await persistPartImages(backup.partImages || {});
+      if (backup.figures) await persistFigures(backup.figures);
       await persistLog(backup.log || []);
       showToast("Sicherung geladen — weiter geht's", "good");
     } catch (e) {
@@ -648,6 +776,11 @@ export default function LegoScanner() {
     const nextMeta = { ...setMeta };
     delete nextMeta[setNum];
     persistSetMeta(nextMeta);
+    if (figures[setNum]) {
+      const nextFigs = { ...figures };
+      delete nextFigs[setNum];
+      persistFigures(nextFigs);
+    }
     if (expandedSetNum === setNum) setExpandedSetNum(null);
   }
 
@@ -1577,6 +1710,13 @@ export default function LegoScanner() {
             aria-label="Manuelle Suche"
           >
             <Search size={20} />
+          </button>
+          <button
+            onClick={() => setScreen(screen === "figures" ? "setup" : "figures")}
+            style={{ background: "transparent", border: "none", color: screen === "figures" ? COLORS.accent : COLORS.textDim, padding: 6, display: "flex" }}
+            aria-label="Figuren"
+          >
+            <Users size={20} />
           </button>
           <button
             onClick={() => setScreen(screen === "globalSearch" ? "setup" : "globalSearch")}
@@ -2787,6 +2927,429 @@ export default function LegoScanner() {
                     </>
                   );
                 })()}
+              </>
+            );
+          })()}
+        </main>
+      )}
+
+      {screen === "figures" && (
+        <main style={{ flex: 1, padding: 20, maxWidth: 480, margin: "0 auto", width: "100%" }}>
+          <h1 style={{ fontSize: 22, fontWeight: 800, marginBottom: 4, letterSpacing: "-0.02em" }}>Figuren</h1>
+          <p style={{ fontSize: 13, color: COLORS.textDim, lineHeight: 1.5, marginBottom: 14 }}>
+            Alle Minifiguren deiner Sets mit Bild. Tipp: erst Köpfe, Torsos, Beine, Haare und Zubehör
+            getrennt vorsortieren, dann pro Figur die Teile abhaken.
+          </p>
+
+          {(() => {
+            const setsWithLists = mySets.filter((s) => (partsLists[s] || []).length > 0);
+            const missingSets = setsWithLists.filter((s) => !figures[s]);
+
+            // Alle Figuren mit Fortschritt berechnen
+            const all = [];
+            setsWithLists.forEach((setNum) => {
+              const list = partsLists[setNum] || [];
+              const counts = collectedCounts[setNum] || {};
+              (figures[setNum] || []).forEach((fig, fi) => {
+                let total = 0;
+                let done = 0;
+                const parts = fig.parts.map((p) => {
+                  const entry = p.idx >= 0 ? list[p.idx] : null;
+                  const valid = !!entry && entry.elementId === p.elementId && entry.colorName === p.colorName;
+                  const collected = valid ? Math.min(counts[p.idx] || 0, p.qty) : 0;
+                  total += p.qty;
+                  done += collected;
+                  return { ...p, valid, collected };
+                });
+                all.push({ key: `${setNum}|${fig.figNum}|${fi}`, setNum, fig, parts, total, done, pct: total > 0 ? done / total : 0 });
+              });
+            });
+
+            const q = figureQuery.trim().toLowerCase();
+            let filtered = all.filter((f) => {
+              if (figureSetFilter !== "all" && f.setNum !== figureSetFilter) return false;
+              if (figureStatusFilter === "open" && f.done > 0) return false;
+              if (figureStatusFilter === "partial" && !(f.done > 0 && f.done < f.total)) return false;
+              if (figureStatusFilter === "done" && f.done < f.total) return false;
+              if (figureStatusFilter === "unfinished" && f.done >= f.total) return false;
+              if (q) {
+                const hay = `${f.fig.name} ${f.fig.figNum} ${f.setNum} ${f.parts.map((p) => p.name + " " + p.colorName).join(" ")}`.toLowerCase();
+                if (!q.split(",").map((t) => t.trim()).filter(Boolean).every((t) => hay.includes(t))) return false;
+              }
+              return true;
+            });
+            filtered = filtered.sort((a, b) => {
+              if (figureSort === "name") return a.fig.name.localeCompare(b.fig.name);
+              // "Fast fertig zuerst": angefangene oben, komplette ans Ende
+              const aDone = a.total > 0 && a.done >= a.total ? 1 : 0;
+              const bDone = b.total > 0 && b.done >= b.total ? 1 : 0;
+              if (aDone !== bDone) return aDone - bDone;
+              if (b.pct !== a.pct) return b.pct - a.pct;
+              return a.fig.name.localeCompare(b.fig.name);
+            });
+            const visible = filtered.slice(0, figureShowCount);
+            const totalFigs = all.length;
+            const completeFigs = all.filter((f) => f.total > 0 && f.done >= f.total).length;
+
+            const selectStyle = {
+              flex: 1,
+              background: COLORS.panel,
+              border: `1px solid ${COLORS.panelBorder}`,
+              borderRadius: 8,
+              padding: "8px 6px",
+              color: COLORS.text,
+              fontSize: 12,
+            };
+
+            return (
+              <>
+                {(missingSets.length > 0 || figuresProgress) && (
+                  <div
+                    style={{
+                      background: COLORS.panel,
+                      border: `1px solid ${COLORS.panelBorder}`,
+                      borderRadius: 12,
+                      padding: 14,
+                      marginBottom: 14,
+                    }}
+                  >
+                    {figuresProgress ? (
+                      <>
+                        <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, color: COLORS.text }}>
+                          <Loader2 size={16} style={{ animation: "spin 1s linear infinite" }} />
+                          {figuresProgress}
+                        </div>
+                        <button
+                          onClick={() => {
+                            figuresCancelRef.current = true;
+                          }}
+                          style={{
+                            marginTop: 10,
+                            background: COLORS.bg,
+                            border: `1px solid ${COLORS.panelBorder}`,
+                            borderRadius: 8,
+                            padding: "8px 12px",
+                            color: COLORS.textDim,
+                            fontSize: 12,
+                          }}
+                        >
+                          Abbrechen (bisher Geladenes bleibt gespeichert)
+                        </button>
+                      </>
+                    ) : (
+                      <>
+                        <div style={{ fontSize: 13, color: COLORS.text, marginBottom: 8, lineHeight: 1.5 }}>
+                          Für {missingSets.length} {missingSets.length === 1 ? "Set" : "Sets"} fehlen noch die Figurendaten.
+                          Das dauert ein paar Minuten (Rebrickable erlaubt nur etwa eine Anfrage pro Sekunde) —
+                          die App bitte währenddessen offen lassen. Dein Fortschritt bleibt unverändert.
+                        </div>
+                        <button
+                          onClick={() => loadFiguresForSets(true)}
+                          style={{
+                            background: COLORS.accent,
+                            border: "none",
+                            borderRadius: 8,
+                            padding: "10px 14px",
+                            color: "#fff",
+                            fontSize: 13,
+                            fontWeight: 700,
+                          }}
+                        >
+                          Figuren laden ({missingSets.length} {missingSets.length === 1 ? "Set" : "Sets"})
+                        </button>
+                      </>
+                    )}
+                  </div>
+                )}
+
+                {totalFigs > 0 && (
+                  <>
+                    <input
+                      value={figureQuery}
+                      onChange={(e) => {
+                        setFigureQuery(e.target.value);
+                        setFigureShowCount(40);
+                      }}
+                      placeholder="Suche: Figurname, Teil, Farbe (mit Komma kombinieren)"
+                      style={{
+                        width: "100%",
+                        background: COLORS.panel,
+                        border: `1px solid ${COLORS.panelBorder}`,
+                        borderRadius: 10,
+                        padding: "10px 12px",
+                        color: COLORS.text,
+                        fontSize: 14,
+                        marginBottom: 8,
+                      }}
+                    />
+                    <div style={{ display: "flex", gap: 8, marginBottom: 8 }}>
+                      <select
+                        value={figureSetFilter}
+                        onChange={(e) => {
+                          setFigureSetFilter(e.target.value);
+                          setFigureShowCount(40);
+                        }}
+                        style={selectStyle}
+                      >
+                        <option value="all">Alle Sets</option>
+                        {setsWithLists
+                          .filter((s) => (figures[s] || []).length > 0)
+                          .map((s) => (
+                            <option key={s} value={s}>
+                              {s}
+                            </option>
+                          ))}
+                      </select>
+                      <select
+                        value={figureStatusFilter}
+                        onChange={(e) => {
+                          setFigureStatusFilter(e.target.value);
+                          setFigureShowCount(40);
+                        }}
+                        style={selectStyle}
+                      >
+                        <option value="all">Alle Status</option>
+                        <option value="unfinished">Noch nicht komplett</option>
+                        <option value="partial">Angefangen</option>
+                        <option value="open">Noch nichts</option>
+                        <option value="done">Komplett</option>
+                      </select>
+                    </div>
+                    <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
+                      <select value={figureSort} onChange={(e) => setFigureSort(e.target.value)} style={selectStyle}>
+                        <option value="progress">Fast fertige zuerst</option>
+                        <option value="name">Name A–Z</option>
+                      </select>
+                    </div>
+                    <div style={{ fontSize: 12, color: COLORS.textDim, marginBottom: 8 }}>
+                      {filtered.length} Figuren angezeigt · {completeFigs} von {totalFigs} komplett
+                    </div>
+                  </>
+                )}
+
+                {totalFigs === 0 && !figuresProgress && missingSets.length === 0 && (
+                  <div
+                    style={{
+                      border: `1px dashed ${COLORS.panelBorder}`,
+                      borderRadius: 12,
+                      padding: "28px 16px",
+                      textAlign: "center",
+                      color: COLORS.textDim,
+                      fontSize: 14,
+                    }}
+                  >
+                    In deinen Sets wurden keine Minifiguren gefunden.
+                  </div>
+                )}
+
+                <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                  {visible.map((f) => {
+                    const isOpen = expandedFigure === f.key;
+                    const complete = f.total > 0 && f.done >= f.total;
+                    return (
+                      <div
+                        key={f.key}
+                        style={{
+                          background: COLORS.panel,
+                          border: `1px solid ${complete ? COLORS.good : COLORS.panelBorder}`,
+                          borderRadius: 10,
+                          overflow: "hidden",
+                        }}
+                      >
+                        <button
+                          onClick={() => setExpandedFigure(isOpen ? null : f.key)}
+                          style={{
+                            width: "100%",
+                            display: "flex",
+                            alignItems: "center",
+                            gap: 12,
+                            padding: 10,
+                            background: "transparent",
+                            border: "none",
+                            textAlign: "left",
+                            color: COLORS.text,
+                          }}
+                        >
+                          {f.fig.imgUrl ? (
+                            <img
+                              src={f.fig.imgUrl}
+                              alt=""
+                              style={{ width: 64, height: 64, objectFit: "contain", borderRadius: 8, background: "#fff", flexShrink: 0 }}
+                            />
+                          ) : (
+                            <div
+                              style={{
+                                width: 64,
+                                height: 64,
+                                borderRadius: 8,
+                                background: COLORS.bg,
+                                display: "flex",
+                                alignItems: "center",
+                                justifyContent: "center",
+                                flexShrink: 0,
+                              }}
+                            >
+                              <Users size={22} color={COLORS.textDim} />
+                            </div>
+                          )}
+                          <div style={{ flex: 1, minWidth: 0 }}>
+                            <div style={{ fontSize: 14, fontWeight: 600, color: "#d4d4d8", lineHeight: 1.3 }}>
+                              {f.fig.name}
+                              {f.fig.quantity > 1 ? ` ×${f.fig.quantity}` : ""}
+                            </div>
+                            <div style={{ fontSize: 12, color: COLORS.textDim, marginTop: 2 }}>
+                              Set {f.setNum} · {f.done}/{f.total} Teile
+                            </div>
+                            <div style={{ height: 5, background: COLORS.bg, borderRadius: 3, marginTop: 6, overflow: "hidden" }}>
+                              <div
+                                style={{
+                                  width: `${Math.round(f.pct * 100)}%`,
+                                  height: "100%",
+                                  background: progressColor(f.pct * 100),
+                                }}
+                              />
+                            </div>
+                          </div>
+                          <ChevronRight
+                            size={18}
+                            color={COLORS.textDim}
+                            style={{ transform: isOpen ? "rotate(90deg)" : "none", flexShrink: 0 }}
+                          />
+                        </button>
+
+                        {isOpen && (
+                          <div style={{ padding: "0 10px 10px", display: "flex", flexDirection: "column", gap: 6 }}>
+                            {f.parts.map((p, pi) => {
+                              const found = p.collected >= p.qty;
+                              return (
+                                <div
+                                  key={`${p.elementId}-${pi}`}
+                                  style={{
+                                    display: "flex",
+                                    alignItems: "center",
+                                    gap: 10,
+                                    background: COLORS.bg,
+                                    borderRadius: 8,
+                                    padding: "6px 8px",
+                                  }}
+                                >
+                                  {p.imageUrl ? (
+                                    <img
+                                      src={p.imageUrl}
+                                      alt=""
+                                      style={{ width: 40, height: 40, objectFit: "contain", borderRadius: 6, background: "#fff", flexShrink: 0 }}
+                                    />
+                                  ) : (
+                                    <div style={{ width: 40, height: 40, flexShrink: 0 }} />
+                                  )}
+                                  <div style={{ flex: 1, minWidth: 0 }}>
+                                    <div style={{ fontSize: 12, color: "#d4d4d8", lineHeight: 1.3 }}>{p.name}</div>
+                                    <div style={{ fontSize: 11, color: COLORS.textDim, marginTop: 2 }}>
+                                      {p.colorName} ·{" "}
+                                      <span style={{ color: found ? COLORS.good : COLORS.textDim }}>
+                                        {p.valid ? `${p.collected}/${p.qty}` : `${p.qty}×`}
+                                      </span>
+                                    </div>
+                                  </div>
+                                  {p.valid ? (
+                                    <div style={{ display: "flex", gap: 5, flexShrink: 0 }}>
+                                      {p.collected > 0 && (
+                                        <button
+                                          onClick={() => decrementCollected(f.setNum, p.idx)}
+                                          aria-label="Zuordnung zurücknehmen"
+                                          style={{
+                                            background: COLORS.panel,
+                                            border: `1px solid ${COLORS.panelBorder}`,
+                                            borderRadius: 6,
+                                            width: 32,
+                                            height: 32,
+                                            display: "flex",
+                                            alignItems: "center",
+                                            justifyContent: "center",
+                                            color: COLORS.textDim,
+                                          }}
+                                        >
+                                          <Minus size={14} />
+                                        </button>
+                                      )}
+                                      {!found && (
+                                        <button
+                                          onClick={() => incrementCollected(f.setNum, p.idx)}
+                                          aria-label="Teil abhaken"
+                                          style={{
+                                            background: COLORS.accent,
+                                            border: "none",
+                                            borderRadius: 6,
+                                            width: 32,
+                                            height: 32,
+                                            display: "flex",
+                                            alignItems: "center",
+                                            justifyContent: "center",
+                                            color: "#fff",
+                                          }}
+                                        >
+                                          <Plus size={14} />
+                                        </button>
+                                      )}
+                                      {found && (
+                                        <div style={{ width: 32, height: 32, display: "flex", alignItems: "center", justifyContent: "center", color: COLORS.good }}>
+                                          <Check size={16} />
+                                        </div>
+                                      )}
+                                    </div>
+                                  ) : (
+                                    <div style={{ fontSize: 10, color: COLORS.textDim, maxWidth: 70, textAlign: "right" }}>
+                                      nicht zuordenbar
+                                    </div>
+                                  )}
+                                </div>
+                              );
+                            })}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+
+                {filtered.length > figureShowCount && (
+                  <button
+                    onClick={() => setFigureShowCount((n) => n + 40)}
+                    style={{
+                      width: "100%",
+                      marginTop: 12,
+                      background: COLORS.panel,
+                      border: `1px solid ${COLORS.panelBorder}`,
+                      borderRadius: 10,
+                      padding: "12px",
+                      color: COLORS.text,
+                      fontSize: 13,
+                      fontWeight: 600,
+                    }}
+                  >
+                    Mehr anzeigen ({filtered.length - figureShowCount} weitere)
+                  </button>
+                )}
+
+                {totalFigs > 0 && missingSets.length === 0 && !figuresProgress && (
+                  <button
+                    onClick={() => {
+                      if (window.confirm("Figurendaten für ALLE Sets neu von Rebrickable laden? (Dein Fortschritt bleibt erhalten.)")) {
+                        loadFiguresForSets(false);
+                      }
+                    }}
+                    style={{
+                      marginTop: 16,
+                      background: "transparent",
+                      border: "none",
+                      color: COLORS.textDim,
+                      fontSize: 12,
+                      textDecoration: "underline",
+                    }}
+                  >
+                    Figurendaten neu laden
+                  </button>
+                )}
               </>
             );
           })()}
