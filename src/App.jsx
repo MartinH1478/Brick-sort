@@ -638,6 +638,58 @@ export default function LegoScanner() {
     });
   }
 
+  // Figurenteile, die keiner Zeile der Teileliste zugeordnet werden konnten ("nicht
+  // zuordenbar"), reparieren: Passende freie Zeile suchen, sonst das Teil an die Teileliste
+  // des Sets anhängen. Häufigster Grund: Die Teileliste wurde geladen, bevor Figurenteile
+  // mitgeladen wurden, oder Rebrickable hat beim Laden einzelne Figuren ausgelassen.
+  // Anhängen verschiebt keine bestehenden Zeilen - der bisherige Fortschritt bleibt gültig.
+  function repairFigureData(lists, figs) {
+    const nextLists = { ...lists };
+    const nextFigs = { ...figs };
+    let fixed = 0;
+    Object.keys(figs).forEach((setNum) => {
+      const list = [...(lists[setNum] || [])];
+      if (list.length === 0) return;
+      let listChanged = false;
+      const isValid = (p) => {
+        const e = p.idx >= 0 ? list[p.idx] : null;
+        return !!e && e.elementId === p.elementId && e.colorName === p.colorName;
+      };
+      const claimed = new Set();
+      (figs[setNum] || []).forEach((fig) => fig.parts.forEach((p) => isValid(p) && claimed.add(p.idx)));
+      nextFigs[setNum] = (figs[setNum] || []).map((fig) => ({
+        ...fig,
+        parts: fig.parts.map((p) => {
+          if (isValid(p)) return p;
+          let idx = list.findIndex(
+            (x, i) => !claimed.has(i) && x.elementId === p.elementId && x.colorName === p.colorName && (x.qty || 0) === p.qty
+          );
+          if (idx < 0) {
+            list.push({ elementId: p.elementId, name: p.name, colorName: p.colorName, qty: p.qty, imageUrl: p.imageUrl });
+            idx = list.length - 1;
+            listChanged = true;
+          }
+          claimed.add(idx);
+          fixed++;
+          return { ...p, idx };
+        }),
+      }));
+      if (listChanged) nextLists[setNum] = list;
+    });
+    return { lists: nextLists, figs: nextFigs, fixed };
+  }
+
+  async function repairFigures() {
+    const { lists, figs, fixed } = repairFigureData(partsLists, figures);
+    if (fixed === 0) {
+      showToast("Alle Figurenteile sind zugeordnet", "good");
+      return;
+    }
+    await persistPartsLists(lists);
+    await persistFigures(figs);
+    showToast(`${fixed} Figurenteile repariert — jetzt abhakbar`, "good");
+  }
+
   async function loadFiguresForSets(onlyMissing = true) {
     if (!rebrickableKey.trim()) {
       showToast("Bitte zuerst einen Rebrickable-API-Key im Zahnrad-Menü eintragen", "warn");
@@ -662,6 +714,12 @@ export default function LegoScanner() {
         failed++;
       }
       await sleep(600);
+    }
+    // Nicht zuordenbare Figurenteile direkt mitreparieren
+    const repaired = repairFigureData(partsLists, acc);
+    if (repaired.fixed > 0) {
+      await persistPartsLists(repaired.lists);
+      await persistFigures(repaired.figs);
     }
     setFiguresProgress(null);
     const done = figuresCancelRef.current ? "Abgebrochen" : "Figuren geladen";
@@ -3036,10 +3094,15 @@ export default function LegoScanner() {
 
             // Alle Figuren mit Fortschritt berechnen
             const all = [];
+            let unmatchedParts = 0;
             setsWithLists.forEach((setNum) => {
               const list = partsLists[setNum] || [];
               const counts = collectedCounts[setNum] || {};
               (figures[setNum] || []).forEach((fig, fi) => {
+                fig.parts.forEach((p) => {
+                  const e = p.idx >= 0 ? list[p.idx] : null;
+                  if (!(e && e.elementId === p.elementId && e.colorName === p.colorName)) unmatchedParts++;
+                });
                 // Mehrfach enthaltene Figuren (quantity > 1) als getrennte Karten auflisten.
                 // Die Teile-Zähler gelten für alle Exemplare zusammen und werden der Reihe
                 // nach auf die Exemplare verteilt (erst Exemplar 1 voll, dann 2 usw.).
@@ -3231,6 +3294,37 @@ export default function LegoScanner() {
                       {filtered.length} Figuren angezeigt · {completeFigs} von {totalFigs} komplett
                     </div>
                   </>
+                )}
+
+                {unmatchedParts > 0 && !figuresProgress && (
+                  <div
+                    style={{
+                      background: COLORS.panel,
+                      border: `1px solid ${COLORS.warn}`,
+                      borderRadius: 12,
+                      padding: 12,
+                      marginBottom: 12,
+                    }}
+                  >
+                    <div style={{ fontSize: 13, color: COLORS.text, marginBottom: 8, lineHeight: 1.5 }}>
+                      {unmatchedParts} Figurenteile sind „nicht zuordenbar". Reparieren nimmt sie in die
+                      Teileliste ihres Sets auf, danach kannst du sie abhaken. Dein Fortschritt bleibt erhalten.
+                    </div>
+                    <button
+                      onClick={repairFigures}
+                      style={{
+                        background: COLORS.warn,
+                        border: "none",
+                        borderRadius: 8,
+                        padding: "9px 14px",
+                        color: "#1a1300",
+                        fontSize: 13,
+                        fontWeight: 700,
+                      }}
+                    >
+                      Jetzt reparieren
+                    </button>
+                  </div>
                 )}
 
                 {totalFigs === 0 && !figuresProgress && missingSets.length === 0 && (
