@@ -52,6 +52,60 @@ const LEGO_COLOR_PALETTE = [
   "Transparent", "Transparent-Klar", "Gold", "Silber", "Perlgrau",
 ].join(", ");
 
+// ---------- Deutsch -> Englisch für die Suchfelder ----------
+// Rebrickable-Teilenamen sind englisch. Wer "Platte, grau, Schräge" tippt, soll trotzdem
+// treffen. Deutsche Begriffe werden auf die englischen Namen/Farben abgebildet; unbekannte
+// Begriffe (z.B. englische oder Zahlen wie "1x2") werden unverändert gesucht.
+const DE_EN = {
+  // Teilearten
+  stein: ["brick"], steine: ["brick"], platte: ["plate"], platten: ["plate"], fliese: ["tile"], fliesen: ["tile"],
+  rad: ["wheel"], räder: ["wheel"], reifen: ["tyre", "tire"], felge: ["wheel"],
+  schräge: ["slope"], schraege: ["slope"], schrägstein: ["slope"], dachstein: ["slope"], dachsteine: ["slope"],
+  keil: ["wedge"], keile: ["wedge"], winkel: ["bracket"], halter: ["bracket"], winkelstein: ["bracket"],
+  scharnier: ["hinge"], gelenk: ["hinge", "joint"], klappe: ["hinge"],
+  gebogen: ["curved"], rund: ["round"], runde: ["round"], rundung: ["curved", "round"], bogen: ["arch", "bow"],
+  ecke: ["corner"], paneel: ["panel"], wand: ["panel", "wall"], fenster: ["window"], tür: ["door"], tuer: ["door"],
+  zaun: ["fence"], kegel: ["cone"], zylinder: ["cylinder"], stift: ["pin"], achse: ["axle"], zahnrad: ["gear"],
+  liftarm: ["beam"], balken: ["beam"], kette: ["chain"], schlauch: ["hose"], schnur: ["string"], seil: ["rope", "string"],
+  fahne: ["flag"], flagge: ["flag"], pflanze: ["plant"], blatt: ["leaf"], baum: ["tree"], flügel: ["wing"], fluegel: ["wing"],
+  frontscheibe: ["windscreen"], windschutzscheibe: ["windscreen"], scheibe: ["windscreen", "disc"], antenne: ["antenna"],
+  stange: ["bar", "rod"], stab: ["rod", "bar"], griff: ["handle"], haken: ["hook"], leiter: ["ladder"], hebel: ["lever"],
+  treppe: ["stairs"], dach: ["roof"], grundplatte: ["baseplate"], noppe: ["stud"], noppen: ["stud"], kiste: ["crate", "box"],
+  tonne: ["barrel"], fass: ["barrel"], tier: ["animal"], pferd: ["horse"], hund: ["dog"], katze: ["cat"], fisch: ["fish"],
+  // Figuren
+  figur: ["minifig", "figure"], minifigur: ["minifig"], kopf: ["head"], köpfe: ["head"], torso: ["torso"], oberkörper: ["torso"],
+  beine: ["legs"], bein: ["leg"], hüfte: ["hips"], hueften: ["hips"], hüften: ["hips"], arm: ["arm"], arme: ["arm"], hand: ["hand"], hände: ["hand"],
+  haare: ["hair"], haar: ["hair"], frisur: ["hair"], helm: ["helmet"], mütze: ["cap", "hat"], muetze: ["cap", "hat"], kappe: ["cap"], hut: ["hat"],
+  umhang: ["cape"], tuch: ["wrap", "cloth"], zubehör: ["accessory"], zubehoer: ["accessory"], ausrüstung: ["equipment"], ausruestung: ["equipment"],
+  waffe: ["weapon"], waffen: ["weapon"], schwert: ["sword"], schild: ["shield"], gewehr: ["gun", "rifle"], pistole: ["gun", "pistol"],
+  axt: ["axe"], werkzeug: ["tool"], brille: ["glasses"], rucksack: ["backpack"], maske: ["mask"], rüstung: ["armor", "armour"], ruestung: ["armor", "armour"],
+  // Farben
+  grau: ["gray", "grey"], hellgrau: ["light gray", "light grey", "light bluish gray"], dunkelgrau: ["dark gray", "dark grey", "dark bluish gray"],
+  schwarz: ["black"], weiß: ["white"], weiss: ["white"], braun: ["brown", "tan", "nougat"], dunkelbraun: ["dark brown", "reddish brown"],
+  rot: ["red"], dunkelrot: ["dark red"], blau: ["blue", "azure"], hellblau: ["light blue", "bright light blue", "medium azure", "azure"],
+  dunkelblau: ["dark blue"], grün: ["green", "lime", "olive"], gruen: ["green", "lime", "olive"], hellgrün: ["light green", "lime"],
+  dunkelgrün: ["dark green"], gelb: ["yellow"], orange: ["orange"], lila: ["purple", "violet", "lavender", "magenta"], rosa: ["pink"],
+  pink: ["pink", "magenta"], gold: ["gold"], silber: ["silver", "chrome"], transparent: ["trans"], durchsichtig: ["trans"],
+  beige: ["beige", "tan"], limette: ["lime"], olive: ["olive"], sand: ["sand"],
+};
+
+// true, wenn der (kleingeschriebene) Suchbegriff im Text vorkommt - deutsch oder englisch.
+function termMatches(hay, term) {
+  const t = term.trim().toLowerCase();
+  if (!t) return true;
+  let alts = DE_EN[t];
+  if (!alts) {
+    // Teilwort-Eingabe (z.B. "schräg" -> "schräge"): passende deutsche Begriffe dazunehmen
+    alts = [t];
+    if (t.length >= 3) {
+      Object.keys(DE_EN).forEach((k) => {
+        if (k.startsWith(t)) alts = alts.concat(DE_EN[k]);
+      });
+    }
+  }
+  return alts.some((a) => hay.includes(a));
+}
+
 function Stud({ size = 10, color = COLORS.accent }) {
   return (
     <span
@@ -1364,13 +1418,13 @@ export default function LegoScanner() {
   // landen z.B. beide unter "Grün".
   function simplifyColor(colorName) {
     const c = (colorName || "").toLowerCase();
-    if (c.includes("lime")) return "Grün";
+    if (c.includes("lime") || c.includes("olive")) return "Grün";
     if (c.includes("azure")) return "Blau";
-    if (c.includes("nougat")) return "Braun";
+    if (c.includes("nougat") || /\btan\b/.test(c)) return "Braun";
     if (c.includes("gray") || c.includes("grey")) return "Grau";
     if (c.includes("black")) return "Schwarz";
     if (c.includes("white")) return "Weiß";
-    if (c.includes("brown") || c.includes("tan") || c.includes("beige")) return "Braun";
+    if (c.includes("brown") || /\btan\b/.test(c) || c.includes("beige")) return "Braun";
     if (c.includes("red")) return "Rot";
     if (c.includes("blue")) return "Blau";
     if (c.includes("green")) return "Grün";
@@ -1883,7 +1937,10 @@ export default function LegoScanner() {
       {screen === "setup" && (
         <main style={{ flex: 1, padding: 20, maxWidth: 480, margin: "0 auto", width: "100%" }}>
           <h1 style={{ fontSize: 22, fontWeight: 800, marginBottom: 4, letterSpacing: "-0.02em" }}>
-            Deine Sets
+            Deine Sets{" "}
+            <span style={{ fontSize: 14, fontWeight: 600, color: COLORS.textDim, letterSpacing: 0 }}>
+              · {mySets.length} {mySets.length === 1 ? "Set" : "Sets"} gesamt
+            </span>
           </h1>
           <p style={{ color: COLORS.textDim, fontSize: 14, marginBottom: 20, lineHeight: 1.5 }}>
             Trag die Setnummern ein, zu denen lose Teile gehören könnten. Beim Scannen gleichen wir
@@ -2640,16 +2697,16 @@ export default function LegoScanner() {
                     }}
                   >
                     <option value="all">Alle Kategorien</option>
-                    <option value="Brick">Brick</option>
-                    <option value="Plate">Plate</option>
-                    <option value="Tile">Tile</option>
-                    <option value="Wheel">Wheel</option>
-                    <option value="Weapon">Weapon</option>
-                    <option value="Sloped">Sloped</option>
-                    <option value="Curved">Curved</option>
-                    <option value="Wedge">Wedge</option>
-                    <option value="Bracket">Bracket</option>
-                    <option value="Hinge">Hinge</option>
+                    <option value="Brick">Stein (Brick)</option>
+                    <option value="Plate">Platte (Plate)</option>
+                    <option value="Tile">Fliese (Tile)</option>
+                    <option value="Wheel">Rad (Wheel)</option>
+                    <option value="Weapon">Waffe (Weapon)</option>
+                    <option value="Sloped">Schräge (Sloped)</option>
+                    <option value="Curved">Gebogen (Curved)</option>
+                    <option value="Wedge">Keil (Wedge)</option>
+                    <option value="Bracket">Winkel (Bracket)</option>
+                    <option value="Hinge">Gelenk (Hinge)</option>
                     <option value="Technic">Technic</option>
                     <option value="Figur">Figur</option>
                     <option value="Sonstiges">Sonstiges</option>
@@ -2723,7 +2780,7 @@ export default function LegoScanner() {
                         const hay = `${entry.name || ""} ${entry.colorName || ""} ${entry.elementId || ""} ${setNum}`
                           .toLowerCase()
                           .replace(/\s*x\s*/g, "x");
-                        if (!qTerms.every((term) => hay.includes(term))) return;
+                        if (!qTerms.every((term) => termMatches(hay, term))) return;
                       }
                       results.push({ setNum, index, entry, collected, remaining });
                     });
@@ -3023,7 +3080,7 @@ export default function LegoScanner() {
               if (figureStatusFilter === "unfinished" && f.done >= f.total) return false;
               if (q) {
                 const hay = `${f.fig.name} ${f.fig.figNum} ${f.setNum} ${f.parts.map((p) => p.name + " " + p.colorName).join(" ")}`.toLowerCase();
-                if (!q.split(",").map((t) => t.trim()).filter(Boolean).every((t) => hay.includes(t))) return false;
+                if (!q.split(",").map((t) => t.trim()).filter(Boolean).every((t) => termMatches(hay, t))) return false;
               }
               return true;
             });
